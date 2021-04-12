@@ -4,11 +4,11 @@ Extension traits for [`rusoto_cloudformation::CloudFormationClient`](https://doc
 
 ## Current status
 
-- [x] `*_checked` APIs that start an operation and poll until it completes.
+- [x] Raw `*_checked` APIs that start an operation and poll until it completes.
 - [x] Some simple integration tests.
-- [ ] `*_stream` APIs that start an operation and return a `Stream` of events.
-- [ ] Make repository public and enable tests on PR as required status checks.
+- [ ] Raw `*_stream` APIs that start an operation and return a `Stream` of events.
 - [ ] 'Cooked' variants of the above that tighten up the `rusoto_cloudformation` types to be more misuse-resistant.
+- [ ] Make repository public and enable tests on PR as required status checks.
 - [ ] Publish to crates.io.
 - [ ] Mad unification of error types with some kind of `Operation` trait.
 - [ ] Mad unification of logic with some kind of `Operation` trait.
