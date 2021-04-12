@@ -1,4 +1,4 @@
-# rusoto-cloudformation-ext
+# `rusoto_cloudformation_ext`
 
 Extension traits for [`rusoto_cloudformation::CloudFormationClient`](https://docs.rs/rusoto_cloudformation/0.46.0/rusoto_cloudformation/struct.CloudFormationClient.html) offering higher-level APIs to perform long-running operations and await their termination or observe their progress.
 
