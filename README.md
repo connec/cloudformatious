@@ -8,5 +8,6 @@ Extension traits for [`rusoto_cloudformation::CloudFormationClient`](https://doc
 - [x] Some simple integration tests.
 - [ ] `*_stream` APIs that start an operation and return a `Stream` of events.
 - [ ] 'Cooked' variants of the above that tighten up the `rusoto_cloudformation` types to be more misuse-resistant.
+- [ ] Publish to crates.io.
 - [ ] Mad unification of error types with some kind of `Operation` trait.
 - [ ] Mad unification of logic with some kind of `Operation` trait.
