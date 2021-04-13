@@ -14,8 +14,8 @@ use rusoto_cloudformation::{
     CloudFormation, CreateChangeSetError, CreateChangeSetInput, CreateStackError, CreateStackInput,
     DeleteStackError, DeleteStackInput, DescribeChangeSetError, DescribeChangeSetInput,
     DescribeChangeSetOutput, DescribeStackEventsError, DescribeStackEventsInput,
-    DescribeStacksError, DescribeStacksInput, Stack, StackEvent, UpdateStackError,
-    UpdateStackInput,
+    DescribeStacksError, DescribeStacksInput, ExecuteChangeSetError, ExecuteChangeSetInput, Stack,
+    StackEvent, UpdateStackError, UpdateStackInput,
 };
 use rusoto_core::RusotoError;
 use tokio::time::Instant;
@@ -142,7 +142,7 @@ pub trait CloudFormationExt {
         input: DeleteStackInput,
     ) -> Pin<Box<dyn Future<Output = Result<Stack, DeleteStackCheckedError>> + '_>>;
 
-    /// Delete a stack and wait for the operation to complete.
+    /// Delete a stack and return a stream of relevant stack events.
     ///
     /// This will call the `DeleteStack` API to commence the stack deletion. If that returns
     /// successfully the `DescribeStackEvents` API is polled and the events are emitted through the
@@ -191,6 +191,32 @@ pub trait CloudFormationExt {
     ) -> Pin<
         Box<dyn Future<Output = Result<DescribeChangeSetOutput, CreateChangeSetCheckedError>> + '_>,
     >;
+
+    /// Execute a change set and return a stream of relevant stack events.
+    ///
+    /// This will call the `ExecuteChangeSet` API to commence the execution. If that returns
+    /// successfully the `DescribeStackEvents` API is polled and the events are emitted through the
+    /// returned `Stream`. The stream ends when the stack reaches a settled state.
+    ///
+    /// # Errors
+    ///
+    /// This function itself will never return an error, however since any attempt to poll the
+    /// `DescribeStackEvents` API might fail, each event is wrapped in a `Result` and so must be
+    /// checked for errors.
+    ///
+    /// Any errors returned when calling the `ExecuteChangeSet` or `DescribeStackEvents` APIs are
+    /// returned (via [`ExecuteChangeSetStreamError::ExecuteChangeSet`] and
+    /// [`UpdateStackStreamError::DescribeStackEvents`] respectively).
+    ///
+    /// If the stack settles with a `*_FAILED` status, [`ExecuteChangeSetStreamError::Failed`] is
+    /// returned.
+    ///
+    /// If the stack was seen with an unexpected status, [`ExecuteChangeSetStreamError::Conflict`]
+    /// is returned.
+    fn execute_change_set_stream(
+        &self,
+        input: ExecuteChangeSetInput,
+    ) -> Pin<Box<dyn Stream<Item = Result<StackEvent, ExecuteChangeSetStreamError>> + '_>>;
 }
 
 impl<T> CloudFormationExt for T
@@ -246,6 +272,13 @@ where
         Box<dyn Future<Output = Result<DescribeChangeSetOutput, CreateChangeSetCheckedError>> + '_>,
     > {
         Box::pin(create_change_set_checked(self, input))
+    }
+
+    fn execute_change_set_stream(
+        &self,
+        input: ExecuteChangeSetInput,
+    ) -> Pin<Box<dyn Stream<Item = Result<StackEvent, ExecuteChangeSetStreamError>> + '_>> {
+        Box::pin(execute_change_set_stream(self, input))
     }
 }
 
@@ -871,6 +904,141 @@ async fn create_change_set_checked<Client: CloudFormation>(
                     status: change_set_status.to_string(),
                     change_set,
                 })
+            }
+        }
+    }
+}
+
+/// Errors that can occur during [`execute_change_set_stream`].
+///
+/// [`execute_change_set_stream`]: CloudFormationExt::execute_change_set_stream
+#[derive(Debug, thiserror::Error)]
+pub enum ExecuteChangeSetStreamError {
+    /// The stack settled with a `*_FAILED` status.
+    #[error("failed to execute change set; terminal status: {status}")]
+    Failed {
+        status: String,
+        stack_event: StackEvent,
+    },
+
+    /// The stack was modified while we waited for the change set to execute.
+    #[error("stack had status {status} while waiting for change set to execute")]
+    Conflict {
+        status: String,
+        stack_event: StackEvent,
+    },
+
+    /// The `DescribeChangeSet` operation returned an error.
+    #[error("DescribeChangeSet error: {0}")]
+    DescribeChangeSet(#[from] RusotoError<DescribeChangeSetError>),
+
+    /// The `ExecuteChangeSet` operation returned an error.
+    #[error("ExecuteChangeSet error: {0}")]
+    ExecuteChangeSet(#[from] RusotoError<ExecuteChangeSetError>),
+
+    /// A `DescribeStackEvents` operation returned an error.
+    #[error("DescribeStackEvents error: {0}")]
+    DescribeStackEvents(#[from] RusotoError<DescribeStackEventsError>),
+}
+
+fn execute_change_set_stream<Client: CloudFormation>(
+    client: &Client,
+    input: ExecuteChangeSetInput,
+) -> impl Stream<Item = Result<StackEvent, ExecuteChangeSetStreamError>> + '_ {
+    try_stream! {
+        let stack_id = client
+            .describe_change_set(DescribeChangeSetInput {
+                stack_name: input.stack_name.clone(),
+                change_set_name: input.change_set_name.clone(),
+                ..DescribeChangeSetInput::default()
+            })
+            .await?
+            .stack_id
+            .expect("DescribeChangeSetOutput without stack_id");
+
+        let mut event_cutoff = format_timestamp(Utc::now());
+        client.execute_change_set(input).await?;
+
+        let describe_stack_events_input = DescribeStackEventsInput {
+            stack_name: Some(stack_id.clone()),
+            ..DescribeStackEventsInput::default()
+        };
+        let mut interval = tokio::time::interval_at(
+            Instant::now() + Duration::from_secs(5),
+            Duration::from_secs(5),
+        );
+        let mut statuses = None;
+        loop {
+            interval.tick().await;
+
+            let stack_events: Vec<_> = client
+                .describe_stack_events(describe_stack_events_input.clone())
+                .await?
+                .stack_events
+                .expect("DescribeStackEventsOutput without stack_events")
+                .into_iter()
+                .take_while(|event| event.timestamp > event_cutoff)
+                .collect();
+
+            if let Some(stack_event) = stack_events.first() {
+                event_cutoff = stack_event.timestamp.clone();
+            }
+
+            if let (None, Some(stack_event)) = (statuses, stack_events.last()) {
+                statuses = Some(match stack_event.resource_status.as_deref() {
+                    Some("CREATE_IN_PROGRESS") => (
+                        &[
+                            "CREATE_IN_PROGRESS",
+                            "CREATE_FAILED",
+                            "ROLLBACK_IN_PROGRESS",
+                        ][..],
+                        &["CREATE_COMPLETE"][..],
+                        &["ROLLBACK_FAILED", "ROLLBACK_COMPLETE"][..],
+                    ),
+                    Some("UPDATE_IN_PROGRESS") => (
+                        &[
+                            "UPDATE_IN_PROGRESS",
+                            "UPDATE_COMPLETE_CLEANUP_IN_PROGRESS",
+                            "UPDATE_ROLLBACK_IN_PROGRESS",
+                            "UPDATE_ROLLBACK_COMPLETE_CLEANUP_IN_PROGRESS",
+                        ][..],
+                        &["UPDATE_COMPLETE"][..],
+                        &["UPDATE_ROLLBACK_FAILED", "UPDATE_ROLLBACK_COMPLETE"][..],
+                    ),
+                    _ => panic!(
+                        "can't handle resource_status: {:?}",
+                        stack_event.resource_status
+                    ),
+                });
+            }
+
+            for stack_event in stack_events.into_iter().rev() {
+                if stack_event.physical_resource_id.as_ref() != Some(&stack_id) {
+                    yield stack_event;
+                } else {
+                    let stack_status = stack_event
+                        .resource_status
+                        .as_deref()
+                        .expect("StackEvent without resource_status");
+                    if statuses.unwrap().0.contains(&stack_status) {
+                        yield stack_event;
+                    } else if statuses.unwrap().1.contains(&stack_status) {
+                        yield stack_event;
+                        return;
+                    } else if statuses.unwrap().2.contains(&stack_status) {
+                        Err(ExecuteChangeSetStreamError::Failed {
+                            status: stack_status.to_string(),
+                            stack_event,
+                        })?;
+                        unreachable!()
+                    } else {
+                        Err(ExecuteChangeSetStreamError::Conflict {
+                            status: stack_status.to_string(),
+                            stack_event,
+                        })?;
+                        unreachable!()
+                    }
+                }
             }
         }
     }

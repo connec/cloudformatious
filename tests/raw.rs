@@ -2,7 +2,7 @@ use std::{env, error::Error, time::Duration};
 
 use rusoto_cloudformation::{
     CloudFormation, CloudFormationClient, CreateChangeSetInput, CreateStackInput, DeleteStackInput,
-    StackEvent, Tag, UpdateStackInput,
+    ExecuteChangeSetInput, StackEvent, Tag, UpdateStackInput,
 };
 use rusoto_core::HttpClient;
 use rusoto_credential::{AutoRefreshingProvider, ChainProvider};
@@ -10,7 +10,8 @@ use tokio_stream::StreamExt;
 
 use rusoto_cloudformation_ext::raw::{
     CloudFormationExt, CreateChangeSetCheckedError, CreateStackCheckedError,
-    CreateStackStreamError, UpdateStackCheckedError, UpdateStackStreamError,
+    CreateStackStreamError, ExecuteChangeSetStreamError, UpdateStackCheckedError,
+    UpdateStackStreamError,
 };
 
 const NAME_PREFIX: &str = "rusoto-cloudformation-ext-testing-";
@@ -482,6 +483,107 @@ async fn create_change_set_checked() -> Result<(), Box<dyn Error>> {
         change_set_result,
         Err(CreateChangeSetCheckedError::CreateChangeSet(_))
     ));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn execute_change_set_stream() -> Result<(), Box<dyn Error>> {
+    let client = get_client();
+
+    // Create a change set to execute
+    let stack_name = generated_name();
+    let create_change_set_input = CreateChangeSetInput {
+        stack_name: stack_name.clone(),
+        change_set_name: generated_name(),
+        change_set_type: Some("CREATE".to_string()),
+        template_body: Some(DUMMY_TEMPLATE.to_string()),
+        ..CreateChangeSetInput::default()
+    };
+    let change_set = client
+        .create_change_set_checked(create_change_set_input)
+        .await?;
+
+    // Successful execution
+    let execute_change_set_input = ExecuteChangeSetInput {
+        change_set_name: change_set.change_set_id.unwrap(),
+        ..ExecuteChangeSetInput::default()
+    };
+    let stack_events: Vec<_> = client
+        .execute_change_set_stream(execute_change_set_input)
+        .collect::<Result<_, _>>()
+        .await?;
+    let resource_statuses: Vec<_> = stack_events
+        .iter()
+        .map(|stack_event| {
+            (
+                stack_event.logical_resource_id.as_deref().unwrap(),
+                stack_event.resource_status.as_deref().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        resource_statuses,
+        vec![
+            (stack_name.as_str(), "CREATE_IN_PROGRESS"),
+            (stack_name.as_str(), "CREATE_COMPLETE")
+        ]
+    );
+
+    // Create an update change set
+    let create_change_set_input = CreateChangeSetInput {
+        stack_name: stack_name.clone(),
+        change_set_name: generated_name(),
+        change_set_type: Some("UPDATE".to_string()),
+        template_body: Some(FAILING_TEMPLATE.to_string()),
+        ..CreateChangeSetInput::default()
+    };
+    let change_set = client
+        .create_change_set_checked(create_change_set_input)
+        .await?;
+
+    // Failed execution
+    let execute_change_set_input = ExecuteChangeSetInput {
+        change_set_name: change_set.change_set_id.unwrap(),
+        ..ExecuteChangeSetInput::default()
+    };
+    let stack_events: Vec<_> = client
+        .execute_change_set_stream(execute_change_set_input)
+        .collect()
+        .await;
+    let resource_statuses = stack_events
+        .iter()
+        .map(|result| match result {
+            Ok(stack_event) | Err(ExecuteChangeSetStreamError::Failed { stack_event, .. }) => Ok((
+                stack_event.logical_resource_id.as_deref().unwrap(),
+                stack_event.resource_status.as_deref().unwrap(),
+            )),
+            Err(error) => Err(error),
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    assert_eq!(
+        resource_statuses,
+        vec![
+            (stack_name.as_str(), "UPDATE_IN_PROGRESS"),
+            ("Vpc", "CREATE_FAILED"),
+            (stack_name.as_str(), "UPDATE_ROLLBACK_IN_PROGRESS"),
+            (
+                stack_name.as_str(),
+                "UPDATE_ROLLBACK_COMPLETE_CLEANUP_IN_PROGRESS"
+            ),
+            ("Vpc", "DELETE_COMPLETE"),
+            (stack_name.as_str(), "UPDATE_ROLLBACK_COMPLETE")
+        ]
+    );
+
+    // Clean-up
+    client
+        .delete_stack(DeleteStackInput {
+            stack_name: change_set.stack_id.unwrap(),
+            ..DeleteStackInput::default()
+        })
+        .await?;
 
     Ok(())
 }
