@@ -10,7 +10,7 @@ use tokio_stream::StreamExt;
 
 use rusoto_cloudformation_ext::raw::{
     CloudFormationExt, CreateChangeSetCheckedError, CreateStackCheckedError,
-    CreateStackStreamError, UpdateStackCheckedError,
+    CreateStackStreamError, UpdateStackCheckedError, UpdateStackStreamError,
 };
 
 const NAME_PREFIX: &str = "rusoto-cloudformation-ext-testing-";
@@ -209,6 +209,95 @@ async fn update_stack_checked() -> Result<(), Box<dyn Error>> {
     client
         .delete_stack(DeleteStackInput {
             stack_name: stack.stack_name,
+            ..DeleteStackInput::default()
+        })
+        .await?;
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn update_stack_stream() -> Result<(), Box<dyn Error>> {
+    let client = get_client();
+
+    // Create a stack to update.
+    let create_stack_input = CreateStackInput {
+        stack_name: generated_name(),
+        template_body: Some(DUMMY_TEMPLATE.to_string()),
+        ..CreateStackInput::default()
+    };
+    let stack_name = client
+        .create_stack_checked(create_stack_input)
+        .await?
+        .stack_name;
+
+    // Successful update
+    let update_stack_input = UpdateStackInput {
+        stack_name: stack_name.clone(),
+        tags: Some(vec![Tag {
+            key: "foo".to_string(),
+            value: "bar".to_string(),
+        }]),
+        use_previous_template: Some(true),
+        ..UpdateStackInput::default()
+    };
+    let stack_events: Vec<StackEvent> = client
+        .update_stack_stream(update_stack_input)
+        .collect::<Result<_, _>>()
+        .await?;
+    let resource_statuses: Vec<_> = stack_events
+        .iter()
+        .map(|stack_event| stack_event.resource_status.as_deref().unwrap())
+        .collect();
+    assert_eq!(
+        resource_statuses,
+        vec![
+            "UPDATE_IN_PROGRESS",
+            "UPDATE_COMPLETE_CLEANUP_IN_PROGRESS",
+            "UPDATE_COMPLETE"
+        ]
+    );
+
+    // Failed update
+    let update_stack_input = UpdateStackInput {
+        stack_name: stack_name.clone(),
+        template_body: Some(FAILING_TEMPLATE.to_string()),
+        ..UpdateStackInput::default()
+    };
+    let stack_events: Vec<Result<_, _>> = client
+        .update_stack_stream(update_stack_input)
+        .collect()
+        .await;
+    let resource_statuses = stack_events
+        .iter()
+        .map(|result| match result {
+            Ok(stack_event) | Err(UpdateStackStreamError::Failed { stack_event, .. }) => Ok((
+                stack_event.logical_resource_id.as_deref().unwrap(),
+                stack_event.resource_status.as_deref().unwrap(),
+            )),
+            Err(error) => Err(error),
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    assert_eq!(
+        resource_statuses,
+        vec![
+            (stack_name.as_str(), "UPDATE_IN_PROGRESS"),
+            ("Vpc", "CREATE_FAILED"),
+            (stack_name.as_str(), "UPDATE_ROLLBACK_IN_PROGRESS"),
+            (
+                stack_name.as_str(),
+                "UPDATE_ROLLBACK_COMPLETE_CLEANUP_IN_PROGRESS"
+            ),
+            ("Vpc", "DELETE_COMPLETE"),
+            (stack_name.as_str(), "UPDATE_ROLLBACK_COMPLETE")
+        ]
+    );
+
+    // Clean-up
+    client
+        .delete_stack(DeleteStackInput {
+            stack_name,
             ..DeleteStackInput::default()
         })
         .await?;

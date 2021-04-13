@@ -46,11 +46,11 @@ pub trait CloudFormationExt {
         input: CreateStackInput,
     ) -> Pin<Box<dyn Future<Output = Result<Stack, CreateStackCheckedError>> + '_>>;
 
-    /// Create a stack and return a stream of subsequent stack events.
+    /// Create a stack and return a stream of relevant stack events.
     ///
-    /// This will call the `CreateStack` API to commence stack creation. If this returns
+    /// This will call the `CreateStack` API to commence stack creation. If that returns
     /// successfully the `DescribeStackEvents` API is polled and the events are emitted through the
-    /// the returned `Stream`. The stream ends when the stack reaches a settled state.
+    /// returned `Stream`. The stream ends when the stack reaches a settled state.
     ///
     /// # Errors
     ///
@@ -93,6 +93,32 @@ pub trait CloudFormationExt {
         &self,
         input: UpdateStackInput,
     ) -> Pin<Box<dyn Future<Output = Result<Stack, UpdateStackCheckedError>> + '_>>;
+
+    /// Update a stack and return a stream of relevant stack events.
+    ///
+    /// This will call the `UpdateStack` API to commence the stack update. This that returns
+    /// successfully the `DescribeStackEvents` API is polled and the events are emitted through the
+    /// returned `Stream`. The stream ends when the stack reaches a settled state.
+    ///
+    /// # Errors
+    ///
+    /// This function itself will never return an error, however since any attempt to poll the
+    /// `DescribeStackEvents` API might fail, each event is wrapped in a `Result` and so must be
+    /// checked for errors.
+    ///
+    /// Any errors returned when calling the `UpdateStack` or `DescribeStackEvents` APIs are
+    /// returned (via [`UpdateStackStreamError::UpdateStack`] and
+    /// [`UpdateStackStreamError::DescribeStackEvents`] respectively).
+    ///
+    /// If the stack settles with `UPDATE_ROLLBACK_COMPLETE` or `UPDATE_ROLLBACK_FAILED` status,
+    /// [`UpdateStackStreamError::Failed`] is returned.
+    ///
+    /// If the stack was seen with an unexpected status, [`UpdateStackStreamError::Conflict`] is
+    /// returned.
+    fn update_stack_stream(
+        &self,
+        input: UpdateStackInput,
+    ) -> Pin<Box<dyn Stream<Item = Result<StackEvent, UpdateStackStreamError>> + '_>>;
 
     /// Delete a stack and wait for the operation to complete.
     ///
@@ -164,6 +190,13 @@ where
         input: UpdateStackInput,
     ) -> Pin<Box<dyn Future<Output = Result<Stack, UpdateStackCheckedError>> + '_>> {
         Box::pin(update_stack_checked(self, input))
+    }
+
+    fn update_stack_stream(
+        &self,
+        input: UpdateStackInput,
+    ) -> Pin<Box<dyn Stream<Item = Result<StackEvent, UpdateStackStreamError>> + '_>> {
+        Box::pin(update_stack_stream(self, input))
     }
 
     fn delete_stack_checked(
@@ -420,6 +453,110 @@ async fn update_stack_checked<Client: CloudFormation>(
                     status: stack.stack_status.clone(),
                     stack,
                 })
+            }
+        }
+    }
+}
+
+/// Errors that can be emitted by [`update_stack_stream`].
+///
+/// [`update_stack_stream`]: CloudFormationExt::update_stack_stream
+#[derive(Debug, thiserror::Error)]
+pub enum UpdateStackStreamError {
+    /// The stack settled with a `UPDATE_ROLLBACK_COMPLETE` or `UPDATE_ROLLBACK_FAILED` status.
+    #[error("stack failed to update; terminal status: {status}")]
+    Failed {
+        status: String,
+        stack_event: StackEvent,
+    },
+
+    /// The stack was modified while we waited for it to finish updating.
+    #[error("stack had status {status} while waiting for creation to finish")]
+    Conflict {
+        status: String,
+        stack_event: StackEvent,
+    },
+
+    /// The `UpdateStack` operation returned an error.
+    #[error("UpdateStack error: {0}")]
+    UpdateStack(#[from] RusotoError<UpdateStackError>),
+
+    /// The `DescribeStackEvents` operation returned an error.
+    #[error("DescribeStackEvents error: {0}")]
+    DescribeStackEvents(#[from] RusotoError<DescribeStackEventsError>),
+}
+
+fn update_stack_stream<Client: CloudFormation>(
+    client: &Client,
+    input: UpdateStackInput,
+) -> impl Stream<Item = Result<StackEvent, UpdateStackStreamError>> + '_ {
+    try_stream! {
+        let mut event_cutoff = format_timestamp(Utc::now());
+        let stack_id = client
+            .update_stack(input)
+            .await?
+            .stack_id
+            .expect("UpdateStackOutput without stack_id");
+
+        let describe_stack_events_input = DescribeStackEventsInput {
+            stack_name: Some(stack_id.clone()),
+            ..DescribeStackEventsInput::default()
+        };
+        let mut interval = tokio::time::interval_at(
+            Instant::now() + Duration::from_secs(5),
+            Duration::from_secs(5),
+        );
+        loop {
+            interval.tick().await;
+
+            let stack_events: Vec<_> = client
+                .describe_stack_events(describe_stack_events_input.clone())
+                .await?
+                .stack_events
+                .expect("DescribeStackEventsOutput without stack_events")
+                .into_iter()
+                .take_while(|event| event.timestamp > event_cutoff)
+                .collect();
+
+            if let Some(stack_event) = stack_events.first() {
+                event_cutoff = stack_event.timestamp.clone();
+            }
+
+            for stack_event in stack_events.into_iter().rev() {
+                if stack_event.physical_resource_id.as_ref() != Some(&stack_id) {
+                    yield stack_event;
+                } else {
+                    let stack_status = stack_event
+                        .resource_status
+                        .as_deref()
+                        .expect("StackEvent without resource_status");
+                    match stack_status {
+                        "UPDATE_IN_PROGRESS"
+                        | "UPDATE_COMPLETE_CLEANUP_IN_PROGRESS"
+                        | "UPDATE_ROLLBACK_IN_PROGRESS"
+                        | "UPDATE_ROLLBACK_COMPLETE_CLEANUP_IN_PROGRESS" => {
+                            yield stack_event;
+                        }
+                        "UPDATE_COMPLETE" => {
+                            yield stack_event;
+                            return;
+                        }
+                        "UPDATE_ROLLBACK_FAILED" | "UPDATE_ROLLBACK_COMPLETE" => {
+                            Err(UpdateStackStreamError::Failed {
+                                status: stack_status.to_string(),
+                                stack_event,
+                            })?;
+                            unreachable!()
+                        }
+                        _ => {
+                            Err(UpdateStackStreamError::Conflict {
+                                status: stack_status.to_string(),
+                                stack_event,
+                            })?;
+                            unreachable!()
+                        }
+                    }
+                }
             }
         }
     }
