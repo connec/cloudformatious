@@ -345,6 +345,76 @@ async fn delete_stack_checked() -> Result<(), Box<dyn Error>> {
 }
 
 #[tokio::test]
+async fn delete_stack_stream() -> Result<(), Box<dyn Error>> {
+    let client = get_client();
+
+    // Create a stack to delete
+    let stack_name = generated_name();
+    let create_stack_input = CreateStackInput {
+        stack_name: stack_name.clone(),
+        template_body: Some(DUMMY_TEMPLATE.to_string()),
+        ..CreateStackInput::default()
+    };
+    let stack = client.create_stack_checked(create_stack_input).await?;
+
+    // Successful delete
+    let delete_stack_input = DeleteStackInput {
+        stack_name: stack.stack_id.unwrap(),
+        ..DeleteStackInput::default()
+    };
+    let stack_events: Vec<StackEvent> = client
+        .delete_stack_stream(delete_stack_input.clone())
+        .collect::<Result<_, _>>()
+        .await?;
+    let resource_statuses: Vec<_> = stack_events
+        .iter()
+        .map(|stack_event| {
+            (
+                stack_event.logical_resource_id.as_deref().unwrap(),
+                stack_event.resource_status.as_deref().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        resource_statuses,
+        vec![
+            (stack_name.as_str(), "DELETE_IN_PROGRESS"),
+            (stack_name.as_str(), "DELETE_COMPLETE")
+        ]
+    );
+
+    // Delete idempotent with id
+    let stack_events: Vec<StackEvent> = client
+        .delete_stack_stream(delete_stack_input)
+        .collect::<Result<_, _>>()
+        .await?;
+    let resource_statuses: Vec<_> = stack_events
+        .iter()
+        .map(|stack_event| {
+            (
+                stack_event.logical_resource_id.as_deref().unwrap(),
+                stack_event.resource_status.as_deref().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(resource_statuses, Vec::<(&str, &str)>::new());
+
+    // Delete fails with name
+    let delete_stack_input = DeleteStackInput {
+        stack_name: stack.stack_name,
+        ..DeleteStackInput::default()
+    };
+    let results = client
+        .delete_stack_stream(delete_stack_input)
+        .collect::<Vec<_>>()
+        .await;
+    assert_eq!(results.len(), 1);
+    assert!(results.first().unwrap().is_err());
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn create_change_set_checked() -> Result<(), Box<dyn Error>> {
     let client = get_client();
 

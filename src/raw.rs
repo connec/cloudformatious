@@ -96,7 +96,7 @@ pub trait CloudFormationExt {
 
     /// Update a stack and return a stream of relevant stack events.
     ///
-    /// This will call the `UpdateStack` API to commence the stack update. This that returns
+    /// This will call the `UpdateStack` API to commence the stack update. If that returns
     /// successfully the `DescribeStackEvents` API is polled and the events are emitted through the
     /// returned `Stream`. The stream ends when the stack reaches a settled state.
     ///
@@ -141,6 +141,32 @@ pub trait CloudFormationExt {
         &self,
         input: DeleteStackInput,
     ) -> Pin<Box<dyn Future<Output = Result<Stack, DeleteStackCheckedError>> + '_>>;
+
+    /// Delete a stack and wait for the operation to complete.
+    ///
+    /// This will call the `DeleteStack` API to commence the stack deletion. If that returns
+    /// successfully the `DescribeStackEvents` API is polled and the events are emitted through the
+    /// returned `Stream`. The stream ends when the stack reaches a settled state.
+    ///
+    /// # Errors
+    ///
+    /// This function itself will never return an error, however since any attempt to poll the
+    /// `DescribeStackEvents` API might fail, each event is wrapped in a `Result` and so must be
+    /// checked for errors.
+    ///
+    /// Any errors returned when calling the `DeleteStack` or `DescribeStackEvents` APIs are
+    /// returned (via [`DeleteStackStreamError::DeleteStack`] and
+    /// [`UpdateStackStreamError::DescribeStackEvents`] respectively).
+    ///
+    /// If the stack settles with `DELETE_COMPLETE` or `DELETE_FAILED` status,
+    /// [`DeleteStackStreamError::Failed`] is returned.
+    ///
+    /// If the stack was seen with an unexpected status, [`DeleteStackStreamError::Conflict`] is
+    /// returned.
+    fn delete_stack_stream(
+        &self,
+        input: DeleteStackInput,
+    ) -> Pin<Box<dyn Stream<Item = Result<StackEvent, DeleteStackStreamError>> + '_>>;
 
     /// Create a change set and wait for it to become available.
     ///
@@ -204,6 +230,13 @@ where
         input: DeleteStackInput,
     ) -> Pin<Box<dyn Future<Output = Result<Stack, DeleteStackCheckedError>> + '_>> {
         Box::pin(delete_stack_checked(self, input))
+    }
+
+    fn delete_stack_stream(
+        &self,
+        input: DeleteStackInput,
+    ) -> Pin<Box<dyn Stream<Item = Result<StackEvent, DeleteStackStreamError>> + '_>> {
+        Box::pin(delete_stack_stream(self, input))
     }
 
     fn create_change_set_checked(
@@ -643,6 +676,128 @@ async fn delete_stack_checked<Client: CloudFormation>(
         client.delete_stack(input).await?;
 
         panic!("delete_stack_checked succeeded even though stack doesn't exist");
+    }
+}
+
+/// Errors that can be emitted by [`delete_stack_stream`].
+///
+/// [`delete_stack_stream`]: CloudFormationExt::delete_stack_stream
+#[derive(Debug, thiserror::Error)]
+pub enum DeleteStackStreamError {
+    /// The stack settled with a `UPDATE_ROLLBACK_COMPLETE` or `UPDATE_ROLLBACK_FAILED` status.
+    #[error("stack failed to delete; terminal status: {status}")]
+    Failed {
+        status: String,
+        stack_event: StackEvent,
+    },
+
+    /// The stack was modified while we waited for it to finish updating.
+    #[error("stack had status {status} while waiting for creation to finish")]
+    Conflict {
+        status: String,
+        stack_event: StackEvent,
+    },
+
+    /// The `DescribeStacks` operation returned an error.
+    #[error("DescribeStacks error: {0}")]
+    DescribeStacks(#[from] RusotoError<DescribeStacksError>),
+
+    /// The `DeleteStack` operation returned an error.
+    #[error("DeleteStack error: {0}")]
+    DeleteStack(#[from] RusotoError<DeleteStackError>),
+
+    /// The `DescribeStackEvents` operation returned an error.
+    #[error("DescribeStackEvents error: {0}")]
+    DescribeStackEvents(#[from] RusotoError<DescribeStackEventsError>),
+}
+
+fn delete_stack_stream<Client: CloudFormation>(
+    client: &Client,
+    input: DeleteStackInput,
+) -> impl Stream<Item = Result<StackEvent, DeleteStackStreamError>> + '_ {
+    try_stream! {
+        let describe_stacks_input = DescribeStacksInput {
+            stack_name: Some(input.stack_name.clone()),
+            ..DescribeStacksInput::default()
+        };
+        if let Some(stack) = client
+            .describe_stacks(describe_stacks_input)
+            .await?
+            .stacks
+            .expect("DescribeStacksOutput without stacks")
+            .pop()
+        {
+            if stack.stack_status == "DELETE_COMPLETE" {
+                return;
+            }
+            let stack_id = stack.stack_id.expect("Stack without stack_id");
+            let mut event_cutoff = format_timestamp(Utc::now());
+            client.delete_stack(input).await?;
+
+            let describe_stack_events_input = DescribeStackEventsInput {
+                stack_name: Some(stack_id.clone()),
+                ..DescribeStackEventsInput::default()
+            };
+            let mut interval = tokio::time::interval_at(
+                Instant::now() + Duration::from_secs(5),
+                Duration::from_secs(5),
+            );
+            loop {
+                interval.tick().await;
+
+                let stack_events: Vec<_> = client
+                    .describe_stack_events(describe_stack_events_input.clone())
+                    .await?
+                    .stack_events
+                    .expect("DescribeStackEventsOutput without stack_events")
+                    .into_iter()
+                    .take_while(|event| event.timestamp > event_cutoff)
+                    .collect();
+
+                if let Some(stack_event) = stack_events.first() {
+                    event_cutoff = stack_event.timestamp.clone();
+                }
+
+                for stack_event in stack_events.into_iter().rev() {
+                    if stack_event.physical_resource_id.as_ref() != Some(&stack_id) {
+                        yield stack_event;
+                    } else {
+                        let stack_status = stack_event
+                            .resource_status
+                            .as_deref()
+                            .expect("StackEvent without resource_status");
+                        match stack_status {
+                            "DELETE_IN_PROGRESS" => {
+                                yield stack_event;
+                            }
+                            "DELETE_COMPLETE" => {
+                                yield stack_event;
+                                return;
+                            }
+                            "DELETE_FAILED" => {
+                                Err(DeleteStackStreamError::Failed {
+                                    status: stack_status.to_string(),
+                                    stack_event,
+                                })?;
+                                unreachable!()
+                            }
+                            _ => {
+                                Err(DeleteStackStreamError::Conflict {
+                                    status: stack_status.to_string(),
+                                    stack_event,
+                                })?;
+                                unreachable!()
+                            }
+                        }
+                    }
+                }
+            }
+        } else {
+            // The stack doesn't seem to exist, but we'll let the `DeleteStack` API handle this.
+            client.delete_stack(input).await?;
+
+            panic!("delete_stack_stream succeeded even though stack doesn't exist");
+        }
     }
 }
 
