@@ -2,10 +2,11 @@ use std::{env, error::Error, time::Duration};
 
 use rusoto_cloudformation::{
     CloudFormation, CloudFormationClient, CreateChangeSetInput, CreateStackInput, DeleteStackInput,
-    Tag, UpdateStackInput,
+    StackEvent, Tag, UpdateStackInput,
 };
 use rusoto_core::HttpClient;
 use rusoto_credential::{AutoRefreshingProvider, ChainProvider};
+use tokio_stream::StreamExt;
 
 use rusoto_cloudformation_ext::raw::{
     CloudFormationExt, CreateChangeSetCheckedError, CreateStackCheckedError,
@@ -77,6 +78,81 @@ async fn create_stack_checked() -> Result<(), Box<dyn Error>> {
     client
         .delete_stack(DeleteStackInput {
             stack_name: stack.stack_name,
+            ..DeleteStackInput::default()
+        })
+        .await?;
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn create_stack_stream() -> Result<(), Box<dyn Error>> {
+    let client = get_client();
+
+    // Successful create
+    let create_stack_input = CreateStackInput {
+        stack_name: generated_name(),
+        template_body: Some(DUMMY_TEMPLATE.to_string()),
+        ..CreateStackInput::default()
+    };
+    let stack_events: Vec<StackEvent> = client
+        .create_stack_stream(create_stack_input)
+        .collect::<Result<_, _>>()
+        .await?;
+    let resource_statuses: Vec<_> = stack_events
+        .iter()
+        .map(|stack_event| stack_event.resource_status.as_deref().unwrap())
+        .collect();
+    assert_eq!(
+        resource_statuses,
+        vec!["CREATE_IN_PROGRESS", "CREATE_COMPLETE"]
+    );
+
+    // Clean-up
+    client
+        .delete_stack(DeleteStackInput {
+            stack_name: stack_events.last().unwrap().stack_name.to_string(),
+            ..DeleteStackInput::default()
+        })
+        .await?;
+
+    // Failed create
+    let stack_name = generated_name();
+    let create_stack_input = CreateStackInput {
+        stack_name: stack_name.clone(),
+        template_body: Some(FAILING_TEMPLATE.to_string()),
+        ..CreateStackInput::default()
+    };
+    let stack_events: Vec<Result<_, _>> = client
+        .create_stack_stream(create_stack_input)
+        .collect()
+        .await;
+    let resource_statuses = stack_events
+        .iter()
+        .map(|result| match result {
+            Ok(stack_event) | Err(CreateStackStreamError::Failed { stack_event, .. }) => Ok((
+                stack_event.logical_resource_id.as_deref().unwrap(),
+                stack_event.resource_status.as_deref().unwrap(),
+            )),
+            Err(error) => Err(error),
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    assert_eq!(
+        resource_statuses,
+        vec![
+            (stack_name.as_str(), "CREATE_IN_PROGRESS"),
+            ("Vpc", "CREATE_FAILED"),
+            (stack_name.as_str(), "ROLLBACK_IN_PROGRESS"),
+            ("Vpc", "DELETE_COMPLETE"),
+            (stack_name.as_str(), "ROLLBACK_COMPLETE")
+        ]
+    );
+
+    // Clean-up
+    client
+        .delete_stack(DeleteStackInput {
+            stack_name,
             ..DeleteStackInput::default()
         })
         .await?;

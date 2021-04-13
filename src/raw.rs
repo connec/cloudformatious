@@ -8,14 +8,18 @@
 
 use std::{future::Future, pin::Pin, time::Duration};
 
+use async_stream::try_stream;
+use chrono::{DateTime, Utc};
 use rusoto_cloudformation::{
     CloudFormation, CreateChangeSetError, CreateChangeSetInput, CreateStackError, CreateStackInput,
     DeleteStackError, DeleteStackInput, DescribeChangeSetError, DescribeChangeSetInput,
-    DescribeChangeSetOutput, DescribeStacksError, DescribeStacksInput, Stack, UpdateStackError,
+    DescribeChangeSetOutput, DescribeStackEventsError, DescribeStackEventsInput,
+    DescribeStacksError, DescribeStacksInput, Stack, StackEvent, UpdateStackError,
     UpdateStackInput,
 };
 use rusoto_core::RusotoError;
 use tokio::time::Instant;
+use tokio_stream::Stream;
 
 /// [`rusoto_cloudformation::CloudFormation`] extension trait that works directly with
 /// `rusoto_cloudformation` types.
@@ -41,6 +45,32 @@ pub trait CloudFormationExt {
         &self,
         input: CreateStackInput,
     ) -> Pin<Box<dyn Future<Output = Result<Stack, CreateStackCheckedError>> + '_>>;
+
+    /// Create a stack and return a stream of subsequent stack events.
+    ///
+    /// This will call the `CreateStack` API to commence stack creation. If this returns
+    /// successfully the `DescribeStackEvents` API is polled and the events are emitted through the
+    /// the returned `Stream`. The stream ends when the stack reaches a settled state.
+    ///
+    /// # Errors
+    ///
+    /// This function itself will never return an error, however since any attempt to poll the
+    /// `DescribeStackEvents` might fail, each event is wrapped in a `Result` and so must be checked
+    /// for errors.
+    ///
+    /// Any errors returned when calling the `CreateStack` or `DescribeStackEvents` APIs are
+    /// returned (via [`CreateStackStreamError::CreateStack`] and
+    /// [`CreateStackStreamError::DescribeStackEvents`] respectively).
+    ///
+    /// If the stack settles with `ROLLBACK_COMPLETE` or `ROLLBACK_FAILED` status,
+    /// [`CreateStackStreamError::Failed`] is returned.
+    ///
+    /// If the stack was seen with an unexpected status, [`CreateStackStreamError::Conflict`] is
+    /// returned.
+    fn create_stack_stream(
+        &self,
+        input: CreateStackInput,
+    ) -> Pin<Box<dyn Stream<Item = Result<StackEvent, CreateStackStreamError>> + '_>>;
 
     /// Update a stack and wait for it to complete.
     ///
@@ -120,6 +150,13 @@ where
         input: CreateStackInput,
     ) -> Pin<Box<dyn Future<Output = Result<Stack, CreateStackCheckedError>> + '_>> {
         Box::pin(create_stack_checked(self, input))
+    }
+
+    fn create_stack_stream(
+        &self,
+        input: CreateStackInput,
+    ) -> Pin<Box<dyn Stream<Item = Result<StackEvent, CreateStackStreamError>> + '_>> {
+        Box::pin(create_stack_stream(self, input))
     }
 
     fn update_stack_checked(
@@ -210,6 +247,107 @@ async fn create_stack_checked<Client: CloudFormation>(
                     status: stack.stack_status.clone(),
                     stack,
                 })
+            }
+        }
+    }
+}
+
+/// Errors that can be emitted by [`create_stack_stream`].
+///
+/// [`create_stack_stream`]: CloudFormationExt::create_stack_stream
+#[derive(Debug, thiserror::Error)]
+pub enum CreateStackStreamError {
+    /// The stack settled with a `ROLLBACK_COMPLETE` or `ROLLBACK_FAILED` status.
+    #[error("stack failed to create; terminal status: {status}")]
+    Failed {
+        status: String,
+        stack_event: StackEvent,
+    },
+
+    /// The stack was modified while we waited for it to finish creating.
+    #[error("stack had status {status} while waiting for creation to finish")]
+    Conflict {
+        status: String,
+        stack_event: StackEvent,
+    },
+
+    /// The `CreateStack` operation returned an error.
+    #[error("CreateStack error: {0}")]
+    CreateStack(#[from] RusotoError<CreateStackError>),
+
+    /// The `DescribeStackEvents` operation returned an error.
+    #[error("DescribeStackEvents error: {0}")]
+    DescribeStackEvents(#[from] RusotoError<DescribeStackEventsError>),
+}
+
+fn create_stack_stream<Client: CloudFormation>(
+    client: &Client,
+    input: CreateStackInput,
+) -> impl Stream<Item = Result<StackEvent, CreateStackStreamError>> + '_ {
+    try_stream! {
+        let mut event_cutoff = format_timestamp(Utc::now());
+        let stack_id = client
+            .create_stack(input)
+            .await?
+            .stack_id
+            .expect("CreateStackOutput without stack_id");
+
+        let describe_stack_events_input = DescribeStackEventsInput {
+            stack_name: Some(stack_id.clone()),
+            ..DescribeStackEventsInput::default()
+        };
+        let mut interval = tokio::time::interval_at(
+            Instant::now() + Duration::from_secs(5),
+            Duration::from_secs(5),
+        );
+        loop {
+            interval.tick().await;
+
+            let stack_events: Vec<_> = client
+                .describe_stack_events(describe_stack_events_input.clone())
+                .await?
+                .stack_events
+                .expect("DescribeStackEventsOutput without stack_events")
+                .into_iter()
+                .take_while(|event| event.timestamp > event_cutoff)
+                .collect();
+
+            if let Some(stack_event) = stack_events.first() {
+                event_cutoff = stack_event.timestamp.clone();
+            }
+
+            for stack_event in stack_events.into_iter().rev() {
+                if stack_event.physical_resource_id.as_ref() != Some(&stack_id) {
+                    yield stack_event;
+                } else {
+                    let stack_status = stack_event
+                        .resource_status
+                        .as_deref()
+                        .expect("StackEvent without resource_status");
+                    match stack_status {
+                        "CREATE_IN_PROGRESS" | "CREATE_FAILED" | "ROLLBACK_IN_PROGRESS" => {
+                            yield stack_event;
+                        }
+                        "CREATE_COMPLETE" => {
+                            yield stack_event;
+                            return;
+                        }
+                        "ROLLBACK_FAILED" | "ROLLBACK_COMPLETE" => {
+                            Err(CreateStackStreamError::Failed {
+                                status: stack_status.to_string(),
+                                stack_event,
+                            })?;
+                            unreachable!()
+                        }
+                        _ => {
+                            Err(CreateStackStreamError::Conflict {
+                                status: stack_status.to_string(),
+                                stack_event,
+                            })?;
+                            unreachable!()
+                        }
+                    }
+                }
             }
         }
     }
@@ -444,6 +582,11 @@ async fn create_change_set_checked<Client: CloudFormation>(
             }
         }
     }
+}
+
+/// Format a timestamp to the same format as CloudFormation.
+fn format_timestamp(timestamp: DateTime<Utc>) -> String {
+    timestamp.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
 }
 
 #[cfg(test)]
