@@ -10,8 +10,7 @@ use tokio_stream::StreamExt;
 
 use rusoto_cloudformation_ext::raw::{
     CloudFormationExt, CreateChangeSetCheckedError, CreateStackCheckedError,
-    CreateStackStreamError, ExecuteChangeSetStreamError, UpdateStackCheckedError,
-    UpdateStackStreamError,
+    UpdateStackCheckedError,
 };
 
 const NAME_PREFIX: &str = "rusoto-cloudformation-ext-testing-";
@@ -98,6 +97,7 @@ async fn create_stack_stream() -> Result<(), Box<dyn Error>> {
     };
     let stack_events: Vec<StackEvent> = client
         .create_stack_stream(create_stack_input)
+        .await?
         .collect::<Result<_, _>>()
         .await?;
     let resource_statuses: Vec<_> = stack_events
@@ -124,21 +124,20 @@ async fn create_stack_stream() -> Result<(), Box<dyn Error>> {
         template_body: Some(FAILING_TEMPLATE.to_string()),
         ..CreateStackInput::default()
     };
-    let stack_events: Vec<Result<_, _>> = client
+    let stack_events: Vec<StackEvent> = client
         .create_stack_stream(create_stack_input)
-        .collect()
-        .await;
-    let resource_statuses = stack_events
+        .await?
+        .collect::<Result<_, _>>()
+        .await?;
+    let resource_statuses: Vec<_> = stack_events
         .iter()
-        .map(|result| match result {
-            Ok(stack_event) | Err(CreateStackStreamError::Failed { stack_event, .. }) => Ok((
+        .map(|stack_event| {
+            (
                 stack_event.logical_resource_id.as_deref().unwrap(),
                 stack_event.resource_status.as_deref().unwrap(),
-            )),
-            Err(error) => Err(error),
+            )
         })
-        .collect::<Result<Vec<_>, _>>()
-        .unwrap();
+        .collect();
     assert_eq!(
         resource_statuses,
         vec![
@@ -244,6 +243,7 @@ async fn update_stack_stream() -> Result<(), Box<dyn Error>> {
     };
     let stack_events: Vec<StackEvent> = client
         .update_stack_stream(update_stack_input)
+        .await?
         .collect::<Result<_, _>>()
         .await?;
     let resource_statuses: Vec<_> = stack_events
@@ -265,21 +265,20 @@ async fn update_stack_stream() -> Result<(), Box<dyn Error>> {
         template_body: Some(FAILING_TEMPLATE.to_string()),
         ..UpdateStackInput::default()
     };
-    let stack_events: Vec<Result<_, _>> = client
+    let stack_events: Vec<_> = client
         .update_stack_stream(update_stack_input)
-        .collect()
-        .await;
-    let resource_statuses = stack_events
+        .await?
+        .collect::<Result<_, _>>()
+        .await?;
+    let resource_statuses: Vec<_> = stack_events
         .iter()
-        .map(|result| match result {
-            Ok(stack_event) | Err(UpdateStackStreamError::Failed { stack_event, .. }) => Ok((
+        .map(|stack_event| {
+            (
                 stack_event.logical_resource_id.as_deref().unwrap(),
                 stack_event.resource_status.as_deref().unwrap(),
-            )),
-            Err(error) => Err(error),
+            )
         })
-        .collect::<Result<Vec<_>, _>>()
-        .unwrap();
+        .collect();
     assert_eq!(
         resource_statuses,
         vec![
@@ -365,6 +364,7 @@ async fn delete_stack_stream() -> Result<(), Box<dyn Error>> {
     };
     let stack_events: Vec<StackEvent> = client
         .delete_stack_stream(delete_stack_input.clone())
+        .await?
         .collect::<Result<_, _>>()
         .await?;
     let resource_statuses: Vec<_> = stack_events
@@ -387,30 +387,22 @@ async fn delete_stack_stream() -> Result<(), Box<dyn Error>> {
     // Delete idempotent with id
     let stack_events: Vec<StackEvent> = client
         .delete_stack_stream(delete_stack_input)
+        .await?
         .collect::<Result<_, _>>()
         .await?;
-    let resource_statuses: Vec<_> = stack_events
-        .iter()
-        .map(|stack_event| {
-            (
-                stack_event.logical_resource_id.as_deref().unwrap(),
-                stack_event.resource_status.as_deref().unwrap(),
-            )
-        })
-        .collect();
-    assert_eq!(resource_statuses, Vec::<(&str, &str)>::new());
+    assert!(stack_events.is_empty());
 
-    // Delete fails with name
+    // Delete idempotent with name
     let delete_stack_input = DeleteStackInput {
         stack_name: stack.stack_name,
         ..DeleteStackInput::default()
     };
-    let results = client
+    let stack_events: Vec<_> = client
         .delete_stack_stream(delete_stack_input)
-        .collect::<Vec<_>>()
-        .await;
-    assert_eq!(results.len(), 1);
-    assert!(results.first().unwrap().is_err());
+        .await?
+        .collect::<Result<_, _>>()
+        .await?;
+    assert!(stack_events.is_empty());
 
     Ok(())
 }
@@ -511,6 +503,7 @@ async fn execute_change_set_stream() -> Result<(), Box<dyn Error>> {
     };
     let stack_events: Vec<_> = client
         .execute_change_set_stream(execute_change_set_input)
+        .await?
         .collect::<Result<_, _>>()
         .await?;
     let resource_statuses: Vec<_> = stack_events
@@ -549,19 +542,18 @@ async fn execute_change_set_stream() -> Result<(), Box<dyn Error>> {
     };
     let stack_events: Vec<_> = client
         .execute_change_set_stream(execute_change_set_input)
-        .collect()
-        .await;
-    let resource_statuses = stack_events
+        .await?
+        .collect::<Result<_, _>>()
+        .await?;
+    let resource_statuses: Vec<_> = stack_events
         .iter()
-        .map(|result| match result {
-            Ok(stack_event) | Err(ExecuteChangeSetStreamError::Failed { stack_event, .. }) => Ok((
+        .map(|stack_event| {
+            (
                 stack_event.logical_resource_id.as_deref().unwrap(),
                 stack_event.resource_status.as_deref().unwrap(),
-            )),
-            Err(error) => Err(error),
+            )
         })
-        .collect::<Result<Vec<_>, _>>()
-        .unwrap();
+        .collect();
     assert_eq!(
         resource_statuses,
         vec![
