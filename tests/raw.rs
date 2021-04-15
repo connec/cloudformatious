@@ -8,10 +8,7 @@ use rusoto_core::HttpClient;
 use rusoto_credential::{AutoRefreshingProvider, ChainProvider};
 use tokio_stream::StreamExt;
 
-use rusoto_cloudformation_ext::raw::{
-    CloudFormationExt, CreateChangeSetCheckedError, CreateStackCheckedError,
-    UpdateStackCheckedError,
-};
+use rusoto_cloudformation_ext::raw::{CloudFormationExt, CreateChangeSetCheckedError};
 
 const NAME_PREFIX: &str = "rusoto-cloudformation-ext-testing-";
 const DUMMY_TEMPLATE: &str = r#"{
@@ -35,55 +32,6 @@ const FAILING_TEMPLATE: &str = r#"
                 }
             }
             "#;
-
-#[tokio::test]
-async fn create_stack_checked() -> Result<(), Box<dyn Error>> {
-    let client = get_client();
-
-    // Successful create
-    let create_stack_input = CreateStackInput {
-        stack_name: generated_name(),
-        template_body: Some(DUMMY_TEMPLATE.to_string()),
-        ..CreateStackInput::default()
-    };
-    let stack = client.create_stack_checked(create_stack_input).await?;
-    assert_eq!(stack.stack_status.as_str(), "CREATE_COMPLETE");
-
-    // Clean-up
-    client
-        .delete_stack(DeleteStackInput {
-            stack_name: stack.stack_name,
-            ..DeleteStackInput::default()
-        })
-        .await?;
-
-    // Failed create
-    let create_stack_input = CreateStackInput {
-        stack_name: generated_name(),
-        template_body: Some(FAILING_TEMPLATE.to_string()),
-        ..CreateStackInput::default()
-    };
-    let error = client
-        .create_stack_checked(create_stack_input.clone())
-        .await
-        .unwrap_err();
-    let stack = if let CreateStackCheckedError::Failed { status, stack } = error {
-        assert_eq!(status, "ROLLBACK_COMPLETE");
-        stack
-    } else {
-        return Err(error.into());
-    };
-
-    // Clean-up
-    client
-        .delete_stack(DeleteStackInput {
-            stack_name: stack.stack_name,
-            ..DeleteStackInput::default()
-        })
-        .await?;
-
-    Ok(())
-}
 
 #[tokio::test]
 async fn create_stack_stream() -> Result<(), Box<dyn Error>> {
@@ -161,62 +109,6 @@ async fn create_stack_stream() -> Result<(), Box<dyn Error>> {
 }
 
 #[tokio::test]
-async fn update_stack_checked() -> Result<(), Box<dyn Error>> {
-    let client = get_client();
-
-    // Create a stack to update.
-    let create_stack_input = CreateStackInput {
-        stack_name: generated_name(),
-        template_body: Some(DUMMY_TEMPLATE.to_string()),
-        ..CreateStackInput::default()
-    };
-    let stack_name = client
-        .create_stack_checked(create_stack_input)
-        .await?
-        .stack_name;
-
-    // Successful update
-    let update_stack_input = UpdateStackInput {
-        stack_name,
-        tags: Some(vec![Tag {
-            key: "foo".to_string(),
-            value: "bar".to_string(),
-        }]),
-        use_previous_template: Some(true),
-        ..UpdateStackInput::default()
-    };
-    let stack = client.update_stack_checked(update_stack_input).await?;
-    assert_eq!(stack.stack_status, "UPDATE_COMPLETE");
-
-    // Failed update
-    let update_stack_input = UpdateStackInput {
-        stack_name: stack.stack_name.clone(),
-        template_body: Some(FAILING_TEMPLATE.to_string()),
-        ..UpdateStackInput::default()
-    };
-    let error = client
-        .update_stack_checked(update_stack_input.clone())
-        .await
-        .unwrap_err();
-    let stack = if let UpdateStackCheckedError::Failed { status, stack } = error {
-        assert_eq!(status, "UPDATE_ROLLBACK_COMPLETE");
-        stack
-    } else {
-        return Err(error.into());
-    };
-
-    // Clean-up
-    client
-        .delete_stack(DeleteStackInput {
-            stack_name: stack.stack_name,
-            ..DeleteStackInput::default()
-        })
-        .await?;
-
-    Ok(())
-}
-
-#[tokio::test]
 async fn update_stack_stream() -> Result<(), Box<dyn Error>> {
     let client = get_client();
 
@@ -227,8 +119,12 @@ async fn update_stack_stream() -> Result<(), Box<dyn Error>> {
         ..CreateStackInput::default()
     };
     let stack_name = client
-        .create_stack_checked(create_stack_input)
+        .create_stack_stream(create_stack_input)
         .await?
+        .collect::<Result<Vec<_>, _>>()
+        .await?
+        .pop()
+        .unwrap()
         .stack_name;
 
     // Successful update
@@ -306,45 +202,6 @@ async fn update_stack_stream() -> Result<(), Box<dyn Error>> {
 }
 
 #[tokio::test]
-async fn delete_stack_checked() -> Result<(), Box<dyn Error>> {
-    let client = get_client();
-
-    // Create a stack to delete
-    let create_stack_input = CreateStackInput {
-        stack_name: generated_name(),
-        template_body: Some(DUMMY_TEMPLATE.to_string()),
-        ..CreateStackInput::default()
-    };
-    let stack = client.create_stack_checked(create_stack_input).await?;
-
-    // Successful delete
-    let delete_stack_input = DeleteStackInput {
-        stack_name: stack.stack_id.unwrap(),
-        ..DeleteStackInput::default()
-    };
-    let stack = client
-        .delete_stack_checked(delete_stack_input.clone())
-        .await?;
-    assert_eq!(stack.stack_status, "DELETE_COMPLETE");
-
-    // Delete idempotent with id
-    let stack = client
-        .delete_stack_checked(delete_stack_input.clone())
-        .await?;
-    assert_eq!(stack.stack_status, "DELETE_COMPLETE");
-
-    // Delete fails with name
-    let delete_stack_input = DeleteStackInput {
-        stack_name: stack.stack_name,
-        ..DeleteStackInput::default()
-    };
-    let stack_result = client.delete_stack_checked(delete_stack_input).await;
-    assert!(stack_result.is_err());
-
-    Ok(())
-}
-
-#[tokio::test]
 async fn delete_stack_stream() -> Result<(), Box<dyn Error>> {
     let client = get_client();
 
@@ -355,11 +212,17 @@ async fn delete_stack_stream() -> Result<(), Box<dyn Error>> {
         template_body: Some(DUMMY_TEMPLATE.to_string()),
         ..CreateStackInput::default()
     };
-    let stack = client.create_stack_checked(create_stack_input).await?;
+    let stack_event = client
+        .create_stack_stream(create_stack_input)
+        .await?
+        .collect::<Result<Vec<_>, _>>()
+        .await?
+        .pop()
+        .unwrap();
 
     // Successful delete
     let delete_stack_input = DeleteStackInput {
-        stack_name: stack.stack_id.unwrap(),
+        stack_name: stack_event.stack_id,
         ..DeleteStackInput::default()
     };
     let stack_events: Vec<StackEvent> = client
@@ -394,7 +257,7 @@ async fn delete_stack_stream() -> Result<(), Box<dyn Error>> {
 
     // Delete idempotent with name
     let delete_stack_input = DeleteStackInput {
-        stack_name: stack.stack_name,
+        stack_name: stack_event.stack_name,
         ..DeleteStackInput::default()
     };
     let stack_events: Vec<_> = client
@@ -439,10 +302,16 @@ async fn create_change_set_checked() -> Result<(), Box<dyn Error>> {
         template_body: Some(DUMMY_TEMPLATE.to_string()),
         ..CreateStackInput::default()
     };
-    let stack = client.create_stack_checked(create_stack_input).await?;
+    let stack_event = client
+        .create_stack_stream(create_stack_input)
+        .await?
+        .collect::<Result<Vec<_>, _>>()
+        .await?
+        .pop()
+        .unwrap();
 
     let create_change_set_input = CreateChangeSetInput {
-        stack_name: stack.stack_id.unwrap(),
+        stack_name: stack_event.stack_id,
         change_set_name: generated_name(),
         change_set_type: Some("UPDATE".to_string()),
         template_body: Some(DUMMY_TEMPLATE.to_string()),
@@ -461,7 +330,7 @@ async fn create_change_set_checked() -> Result<(), Box<dyn Error>> {
     // Clean-up
     client
         .delete_stack(DeleteStackInput {
-            stack_name: stack.stack_name,
+            stack_name: stack_event.stack_name,
             ..DeleteStackInput::default()
         })
         .await?;

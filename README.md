@@ -4,10 +4,8 @@ Extension traits for [`rusoto_cloudformation::CloudFormationClient`](https://doc
 
 ## Current status
 
-- [x] Raw `*_checked` APIs that start an operation and poll until it completes.
-- [x] Some simple integration tests.
 - [x] Raw `*_stream` APIs that start an operation and return a `Stream` of events.
-- [ ] Use `DescribeStackEvents` in `*_checked` APIs as well to match AWS' consistency model (though does mean APIs will all return `StackEvent`).
+- [x] Some simple integration tests.
 - [ ] 'Cooked' variants of the above that tighten up the `rusoto_cloudformation` types to be more misuse-resistant.
 - [ ] Make repository public and enable tests on PR as required status checks.
 - [ ] Publish to crates.io.
