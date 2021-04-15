@@ -21,6 +21,44 @@ use rusoto_core::RusotoError;
 use tokio::time::Instant;
 use tokio_stream::Stream;
 
+/// In-progress statuses for stack creation.
+const CREATE_STACK_PROGRESS_STATUSES: &[&str] = &[
+    "CREATE_IN_PROGRESS",
+    "CREATE_FAILED",
+    "ROLLBACK_IN_PROGRESS",
+];
+
+/// Terminal statuses for stack creation.
+const CREATE_STACK_TERMINAL_STATUSES: &[&str] =
+    &["CREATE_COMPLETE", "ROLLBACK_FAILED", "ROLLBACK_COMPLETE"];
+
+/// In-progress statuses for stack update.
+const UPDATE_STACK_PROGRESS_STATUSES: &[&str] = &[
+    "UPDATE_IN_PROGRESS",
+    "UPDATE_COMPLETE_CLEANUP_IN_PROGRESS",
+    "UPDATE_ROLLBACK_IN_PROGRESS",
+    "UPDATE_ROLLBACK_COMPLETE_CLEANUP_IN_PROGRESS",
+];
+
+/// Terminal statuses for stack update.
+const UPDATE_STACK_TERMINAL_STATUSES: &[&str] = &[
+    "UPDATE_COMPLETE",
+    "UPDATE_ROLLBACK_FAILED",
+    "UPDATE_ROLLBACK_COMPLETE",
+];
+
+/// In-progress statuses for stack delete.
+const DELETE_STACK_PROGRESS_STATUSES: &[&str] = &["DELETE_IN_PROGRESS"];
+
+/// Terminal statuses for stack delete.
+const DELETE_STACK_TERMINAL_STATUSES: &[&str] = &["DELETE_COMPLETE", "DELETE_FAILED"];
+
+/// In-progress statuses for change set creation.
+const CREATE_CHANGE_SET_PROGRESS_STATUSES: &[&str] = &["CREATE_PENDING", "CREATE_IN_PROGRESS"];
+
+/// Terminal statuses for change set creation.
+const CREATE_CHANGE_SET_TERMINAL_STATUSES: &[&str] = &["CREATE_COMPLETE", "FAILED"];
+
 /// Convenience alias for a `Box::pin`ned `Future`.
 type PinBoxFut<'a, T> = Pin<Box<dyn Future<Output = T> + 'a>>;
 
@@ -231,21 +269,18 @@ async fn create_stack_stream<Client: CloudFormation>(
                         .resource_status
                         .as_deref()
                         .expect("StackEvent without resource_status");
-                    match stack_status {
-                        "CREATE_IN_PROGRESS" | "CREATE_FAILED" | "ROLLBACK_IN_PROGRESS" => {
-                            yield stack_event;
-                        }
-                        "CREATE_COMPLETE" | "ROLLBACK_FAILED" | "ROLLBACK_COMPLETE" => {
-                            yield stack_event;
-                            return;
-                        }
-                        _ => {
-                            panic!(
-                                "stack {} has inconsistent status for create: {}",
-                                stack_id, stack_status
-                            );
-                        }
+                    if CREATE_STACK_PROGRESS_STATUSES.contains(&stack_status) {
+                        yield stack_event;
+                        continue;
                     }
+                    if CREATE_STACK_TERMINAL_STATUSES.contains(&stack_status) {
+                        yield stack_event;
+                        return;
+                    }
+                    panic!(
+                        "stack {} has inconsistent status for create: {}",
+                        stack_id, stack_status
+                    );
                 }
             }
         }
@@ -297,26 +332,18 @@ async fn update_stack_stream<Client: CloudFormation>(
                         .resource_status
                         .as_deref()
                         .expect("StackEvent without resource_status");
-                    match stack_status {
-                        "UPDATE_IN_PROGRESS"
-                        | "UPDATE_COMPLETE_CLEANUP_IN_PROGRESS"
-                        | "UPDATE_ROLLBACK_IN_PROGRESS"
-                        | "UPDATE_ROLLBACK_COMPLETE_CLEANUP_IN_PROGRESS" => {
-                            yield stack_event;
-                        }
-                        "UPDATE_COMPLETE"
-                        | "UPDATE_ROLLBACK_FAILED"
-                        | "UPDATE_ROLLBACK_COMPLETE" => {
-                            yield stack_event;
-                            return;
-                        }
-                        _ => {
-                            panic!(
-                                "stack {} has inconsistent status for update: {}",
-                                stack_id, stack_status
-                            );
-                        }
+                    if UPDATE_STACK_PROGRESS_STATUSES.contains(&stack_status) {
+                        yield stack_event;
+                        continue;
                     }
+                    if UPDATE_STACK_TERMINAL_STATUSES.contains(&stack_status) {
+                        yield stack_event;
+                        return;
+                    }
+                    panic!(
+                        "stack {} has inconsistent status for update: {}",
+                        stack_id, stack_status
+                    );
                 }
             }
         }
@@ -406,21 +433,18 @@ async fn delete_stack_stream<Client: CloudFormation>(
                                 .resource_status
                                 .as_deref()
                                 .expect("StackEvent without resource_status");
-                            match stack_status {
-                                "DELETE_IN_PROGRESS" => {
-                                    yield stack_event;
-                                }
-                                "DELETE_COMPLETE" | "DELETE_FAILED" => {
-                                    yield stack_event;
-                                    return;
-                                }
-                                _ => {
-                                    panic!(
-                                        "stack {} has inconsistent status for update: {}",
-                                        stack_id, stack_status
-                                    );
-                                }
+                            if DELETE_STACK_PROGRESS_STATUSES.contains(&stack_status) {
+                                yield stack_event;
+                                continue;
                             }
+                            if DELETE_STACK_TERMINAL_STATUSES.contains(&stack_status) {
+                                yield stack_event;
+                                return;
+                            }
+                            panic!(
+                                "stack {} has inconsistent status for update: {}",
+                                stack_id, stack_status
+                            );
                         }
                     }
                 }
@@ -475,16 +499,16 @@ async fn create_change_set_wait<Client: CloudFormation>(
             .status
             .as_deref()
             .expect("DescribeChangeSet without status");
-        match change_set_status {
-            "CREATE_PENDING" | "CREATE_IN_PROGRESS" => continue,
-            "CREATE_COMPLETE" | "FAILED" => return Ok(change_set),
-            _ => {
-                panic!(
-                    "change set {} has inconsistent status for create: {}",
-                    change_set_id, change_set_status
-                )
-            }
+        if CREATE_CHANGE_SET_PROGRESS_STATUSES.contains(&change_set_status) {
+            continue;
         }
+        if CREATE_CHANGE_SET_TERMINAL_STATUSES.contains(&change_set_status) {
+            return Ok(change_set);
+        }
+        panic!(
+            "change set {} has inconsistent status for create: {}",
+            change_set_id, change_set_status
+        );
     }
 }
 
@@ -549,25 +573,12 @@ async fn execute_change_set_stream<Client: CloudFormation>(
             if let (None, Some(stack_event)) = (statuses, stack_events.last()) {
                 statuses = Some(match stack_event.resource_status.as_deref() {
                     Some("CREATE_IN_PROGRESS") => (
-                        &[
-                            "CREATE_IN_PROGRESS",
-                            "CREATE_FAILED",
-                            "ROLLBACK_IN_PROGRESS",
-                        ][..],
-                        &["CREATE_COMPLETE", "ROLLBACK_FAILED", "ROLLBACK_COMPLETE"][..],
+                        CREATE_STACK_PROGRESS_STATUSES,
+                        CREATE_STACK_TERMINAL_STATUSES,
                     ),
                     Some("UPDATE_IN_PROGRESS") => (
-                        &[
-                            "UPDATE_IN_PROGRESS",
-                            "UPDATE_COMPLETE_CLEANUP_IN_PROGRESS",
-                            "UPDATE_ROLLBACK_IN_PROGRESS",
-                            "UPDATE_ROLLBACK_COMPLETE_CLEANUP_IN_PROGRESS",
-                        ][..],
-                        &[
-                            "UPDATE_COMPLETE",
-                            "UPDATE_ROLLBACK_FAILED",
-                            "UPDATE_ROLLBACK_COMPLETE",
-                        ][..],
+                        UPDATE_STACK_PROGRESS_STATUSES,
+                        UPDATE_STACK_TERMINAL_STATUSES,
                     ),
                     _ => panic!(
                         "can't handle resource_status: {:?}",
@@ -586,15 +597,16 @@ async fn execute_change_set_stream<Client: CloudFormation>(
                         .expect("StackEvent without resource_status");
                     if statuses.unwrap().0.contains(&stack_status) {
                         yield stack_event;
-                    } else if statuses.unwrap().1.contains(&stack_status) {
+                        continue;
+                    }
+                    if statuses.unwrap().1.contains(&stack_status) {
                         yield stack_event;
                         return;
-                    } else {
-                        panic!(
-                            "stack {} has inconsistent status for update: {}",
-                            stack_id, stack_status
-                        );
                     }
+                    panic!(
+                        "stack {} has inconsistent status for update: {}",
+                        stack_id, stack_status
+                    );
                 }
             }
         }
