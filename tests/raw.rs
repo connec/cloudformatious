@@ -8,7 +8,7 @@ use rusoto_core::HttpClient;
 use rusoto_credential::{AutoRefreshingProvider, ChainProvider};
 use tokio_stream::StreamExt;
 
-use rusoto_cloudformation_ext::raw::{CloudFormationExt, CreateChangeSetCheckedError};
+use rusoto_cloudformation_ext::raw::{CloudFormationExt, CreateChangeSetWaitError};
 
 const NAME_PREFIX: &str = "rusoto-cloudformation-ext-testing-";
 const DUMMY_TEMPLATE: &str = r#"{
@@ -271,7 +271,7 @@ async fn delete_stack_stream() -> Result<(), Box<dyn Error>> {
 }
 
 #[tokio::test]
-async fn create_change_set_checked() -> Result<(), Box<dyn Error>> {
+async fn create_change_set_wait() -> Result<(), Box<dyn Error>> {
     let client = get_client();
 
     // Successful create
@@ -283,7 +283,7 @@ async fn create_change_set_checked() -> Result<(), Box<dyn Error>> {
         ..CreateChangeSetInput::default()
     };
     let change_set = client
-        .create_change_set_checked(create_change_set_input)
+        .create_change_set_wait(create_change_set_input)
         .await?;
     assert_eq!(change_set.execution_status.as_deref(), Some("AVAILABLE"));
     assert_eq!(change_set.status.as_deref(), Some("CREATE_COMPLETE"));
@@ -317,15 +317,11 @@ async fn create_change_set_checked() -> Result<(), Box<dyn Error>> {
         template_body: Some(DUMMY_TEMPLATE.to_string()),
         ..CreateChangeSetInput::default()
     };
-    let error = client
-        .create_change_set_checked(create_change_set_input)
-        .await
-        .unwrap_err();
-    if let CreateChangeSetCheckedError::Failed { status, .. } = error {
-        assert_eq!(status, "FAILED");
-    } else {
-        return Err(error.into());
-    }
+    let change_set = client
+        .create_change_set_wait(create_change_set_input)
+        .await?;
+    assert_eq!(change_set.execution_status.as_deref(), Some("UNAVAILABLE"));
+    assert_eq!(change_set.status.as_deref(), Some("FAILED"));
 
     // Clean-up
     client
@@ -337,12 +333,10 @@ async fn create_change_set_checked() -> Result<(), Box<dyn Error>> {
 
     // CreateChangeSet error
     let create_change_set_input = CreateChangeSetInput::default();
-    let change_set_result = client
-        .create_change_set_checked(create_change_set_input)
-        .await;
+    let change_set_result = client.create_change_set_wait(create_change_set_input).await;
     assert!(matches!(
         change_set_result,
-        Err(CreateChangeSetCheckedError::CreateChangeSet(_))
+        Err(CreateChangeSetWaitError::CreateChangeSet(_))
     ));
 
     Ok(())
@@ -362,7 +356,7 @@ async fn execute_change_set_stream() -> Result<(), Box<dyn Error>> {
         ..CreateChangeSetInput::default()
     };
     let change_set = client
-        .create_change_set_checked(create_change_set_input)
+        .create_change_set_wait(create_change_set_input)
         .await?;
 
     // Successful execution
@@ -401,7 +395,7 @@ async fn execute_change_set_stream() -> Result<(), Box<dyn Error>> {
         ..CreateChangeSetInput::default()
     };
     let change_set = client
-        .create_change_set_checked(create_change_set_input)
+        .create_change_set_wait(create_change_set_input)
         .await?;
 
     // Failed execution

@@ -102,25 +102,25 @@ pub trait CloudFormationExt {
 
     /// Create a change set and wait for it to become available.
     ///
-    /// This will call the `CreateChangeSet` API, but this only begins the creation process. If
+    /// This will call the `CreateChangeSet` API, but that only begins the creation process. If
     /// `CreateChangeSet` returns successfully, the `DescribeChangeSet` API is polled until the
     /// change set has settled.
     ///
     /// # Errors
     ///
     /// Any errors returned when calling the `CreateChangeSet` or `DescribeChangeSet` APIs are
-    /// returned (via [`CreateChangeSetCheckedError::CreateChangeSet`] and
-    /// [`CreateChangeSetCheckedError::DescribeChangeSet`] respectively).
+    /// returned (via [`CreateChangeSetWaitError::CreateChangeSet`] and
+    /// [`CreateChangeSetWaitError::DescribeChangeSet`] respectively).
     ///
-    /// If the change set settled with a `FAILED` status, [`CreateChangeSetCheckedError::Failed`] is
-    /// returned.
+    /// # Panics
     ///
-    /// If the change set was seen with an unexpected status,
-    /// [`CreateChangeSetCheckedError::Conflict`] is returned.
-    fn create_change_set_checked(
+    /// This will panic if the change set enters a status that is unexpected for creation. This
+    /// would be a bug in CloudFormation itself or (more likely) a misunderstanding of its semantics
+    /// that would require this library to be updated!
+    fn create_change_set_wait(
         &self,
         input: CreateChangeSetInput,
-    ) -> PinBoxFut<'_, Result<DescribeChangeSetOutput, CreateChangeSetCheckedError>>;
+    ) -> PinBoxFut<'_, Result<DescribeChangeSetOutput, CreateChangeSetWaitError>>;
 
     /// Execute a change set and return a stream of relevant stack events.
     ///
@@ -171,11 +171,11 @@ where
         Box::pin(delete_stack_stream(self, input))
     }
 
-    fn create_change_set_checked(
+    fn create_change_set_wait(
         &self,
         input: CreateChangeSetInput,
-    ) -> PinBoxFut<'_, Result<DescribeChangeSetOutput, CreateChangeSetCheckedError>> {
-        Box::pin(create_change_set_checked(self, input))
+    ) -> PinBoxFut<'_, Result<DescribeChangeSetOutput, CreateChangeSetWaitError>> {
+        Box::pin(create_change_set_wait(self, input))
     }
 
     fn execute_change_set_stream(
@@ -433,25 +433,11 @@ async fn delete_stack_stream<Client: CloudFormation>(
     }
 }
 
-/// Errors that can occur during [`create_change_set_checked`].
+/// Errors that can occur during [`create_change_set_wait`].
 ///
-/// [`create_change_set_checked`]: CloudFormationExt::create_change_set_checked
+/// [`create_change_set_wait`]: CloudFormationExt::create_change_set_wait
 #[derive(Debug, thiserror::Error)]
-pub enum CreateChangeSetCheckedError {
-    /// The change set settled with a `FAILED` status.
-    #[error("change set failed to create; terminal status: {status}")]
-    Failed {
-        status: String,
-        change_set: DescribeChangeSetOutput,
-    },
-
-    /// The change set was modified while we waited for it to become available.
-    #[error("change set had status {status} while waiting for it to create")]
-    Conflict {
-        status: String,
-        change_set: DescribeChangeSetOutput,
-    },
-
+pub enum CreateChangeSetWaitError {
     /// The `CreateChangeSet` operation returned an error.
     #[error("CreateChangeSet error: {0}")]
     CreateChangeSet(#[from] RusotoError<CreateChangeSetError>),
@@ -461,10 +447,10 @@ pub enum CreateChangeSetCheckedError {
     DescribeChangeSet(#[from] RusotoError<DescribeChangeSetError>),
 }
 
-async fn create_change_set_checked<Client: CloudFormation>(
+async fn create_change_set_wait<Client: CloudFormation>(
     client: &Client,
     input: CreateChangeSetInput,
-) -> Result<DescribeChangeSetOutput, CreateChangeSetCheckedError> {
+) -> Result<DescribeChangeSetOutput, CreateChangeSetWaitError> {
     let change_set_id = client
         .create_change_set(input)
         .await?
@@ -472,7 +458,7 @@ async fn create_change_set_checked<Client: CloudFormation>(
         .expect("CreateChangeSetOutput without id");
 
     let describe_change_set_input = DescribeChangeSetInput {
-        change_set_name: change_set_id,
+        change_set_name: change_set_id.clone(),
         ..DescribeChangeSetInput::default()
     };
     let mut interval = tokio::time::interval_at(
@@ -491,18 +477,12 @@ async fn create_change_set_checked<Client: CloudFormation>(
             .expect("DescribeChangeSet without status");
         match change_set_status {
             "CREATE_PENDING" | "CREATE_IN_PROGRESS" => continue,
-            "CREATE_COMPLETE" => return Ok(change_set),
-            "FAILED" => {
-                return Err(CreateChangeSetCheckedError::Failed {
-                    status: change_set_status.to_string(),
-                    change_set,
-                })
-            }
+            "CREATE_COMPLETE" | "FAILED" => return Ok(change_set),
             _ => {
-                return Err(CreateChangeSetCheckedError::Conflict {
-                    status: change_set_status.to_string(),
-                    change_set,
-                })
+                panic!(
+                    "change set {} has inconsistent status for create: {}",
+                    change_set_id, change_set_status
+                )
             }
         }
     }
