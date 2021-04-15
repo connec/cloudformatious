@@ -21,6 +21,12 @@ use rusoto_core::RusotoError;
 use tokio::time::Instant;
 use tokio_stream::Stream;
 
+/// Convenience alias for a `Box::pin`ned `Future`.
+type PinBoxFut<'a, T> = Pin<Box<dyn Future<Output = T> + 'a>>;
+
+/// Convenience alias for a `Box::pin`ned `Stream`.
+type PinBoxStream<'a, T> = Pin<Box<dyn Stream<Item = T> + 'a>>;
+
 /// [`rusoto_cloudformation::CloudFormation`] extension trait that works directly with
 /// `rusoto_cloudformation` types.
 pub trait CloudFormationExt {
@@ -44,7 +50,7 @@ pub trait CloudFormationExt {
     fn create_stack_checked(
         &self,
         input: CreateStackInput,
-    ) -> Pin<Box<dyn Future<Output = Result<Stack, CreateStackCheckedError>> + '_>>;
+    ) -> PinBoxFut<'_, Result<Stack, CreateStackCheckedError>>;
 
     /// Create a stack and return a stream of relevant stack events.
     ///
@@ -70,7 +76,7 @@ pub trait CloudFormationExt {
     fn create_stack_stream(
         &self,
         input: CreateStackInput,
-    ) -> Pin<Box<dyn Stream<Item = Result<StackEvent, CreateStackStreamError>> + '_>>;
+    ) -> PinBoxStream<'_, Result<StackEvent, CreateStackStreamError>>;
 
     /// Update a stack and wait for it to complete.
     ///
@@ -92,7 +98,7 @@ pub trait CloudFormationExt {
     fn update_stack_checked(
         &self,
         input: UpdateStackInput,
-    ) -> Pin<Box<dyn Future<Output = Result<Stack, UpdateStackCheckedError>> + '_>>;
+    ) -> PinBoxFut<'_, Result<Stack, UpdateStackCheckedError>>;
 
     /// Update a stack and return a stream of relevant stack events.
     ///
@@ -118,7 +124,7 @@ pub trait CloudFormationExt {
     fn update_stack_stream(
         &self,
         input: UpdateStackInput,
-    ) -> Pin<Box<dyn Stream<Item = Result<StackEvent, UpdateStackStreamError>> + '_>>;
+    ) -> PinBoxStream<'_, Result<StackEvent, UpdateStackStreamError>>;
 
     /// Delete a stack and wait for the operation to complete.
     ///
@@ -140,7 +146,7 @@ pub trait CloudFormationExt {
     fn delete_stack_checked(
         &self,
         input: DeleteStackInput,
-    ) -> Pin<Box<dyn Future<Output = Result<Stack, DeleteStackCheckedError>> + '_>>;
+    ) -> PinBoxFut<'_, Result<Stack, DeleteStackCheckedError>>;
 
     /// Delete a stack and return a stream of relevant stack events.
     ///
@@ -166,7 +172,7 @@ pub trait CloudFormationExt {
     fn delete_stack_stream(
         &self,
         input: DeleteStackInput,
-    ) -> Pin<Box<dyn Stream<Item = Result<StackEvent, DeleteStackStreamError>> + '_>>;
+    ) -> PinBoxStream<'_, Result<StackEvent, DeleteStackStreamError>>;
 
     /// Create a change set and wait for it to become available.
     ///
@@ -188,9 +194,7 @@ pub trait CloudFormationExt {
     fn create_change_set_checked(
         &self,
         input: CreateChangeSetInput,
-    ) -> Pin<
-        Box<dyn Future<Output = Result<DescribeChangeSetOutput, CreateChangeSetCheckedError>> + '_>,
-    >;
+    ) -> PinBoxFut<'_, Result<DescribeChangeSetOutput, CreateChangeSetCheckedError>>;
 
     /// Execute a change set and return a stream of relevant stack events.
     ///
@@ -216,7 +220,7 @@ pub trait CloudFormationExt {
     fn execute_change_set_stream(
         &self,
         input: ExecuteChangeSetInput,
-    ) -> Pin<Box<dyn Stream<Item = Result<StackEvent, ExecuteChangeSetStreamError>> + '_>>;
+    ) -> PinBoxStream<'_, Result<StackEvent, ExecuteChangeSetStreamError>>;
 }
 
 impl<T> CloudFormationExt for T
@@ -226,58 +230,56 @@ where
     fn create_stack_checked(
         &self,
         input: CreateStackInput,
-    ) -> Pin<Box<dyn Future<Output = Result<Stack, CreateStackCheckedError>> + '_>> {
+    ) -> PinBoxFut<'_, Result<Stack, CreateStackCheckedError>> {
         Box::pin(create_stack_checked(self, input))
     }
 
     fn create_stack_stream(
         &self,
         input: CreateStackInput,
-    ) -> Pin<Box<dyn Stream<Item = Result<StackEvent, CreateStackStreamError>> + '_>> {
+    ) -> PinBoxStream<'_, Result<StackEvent, CreateStackStreamError>> {
         Box::pin(create_stack_stream(self, input))
     }
 
     fn update_stack_checked(
         &self,
         input: UpdateStackInput,
-    ) -> Pin<Box<dyn Future<Output = Result<Stack, UpdateStackCheckedError>> + '_>> {
+    ) -> PinBoxFut<'_, Result<Stack, UpdateStackCheckedError>> {
         Box::pin(update_stack_checked(self, input))
     }
 
     fn update_stack_stream(
         &self,
         input: UpdateStackInput,
-    ) -> Pin<Box<dyn Stream<Item = Result<StackEvent, UpdateStackStreamError>> + '_>> {
+    ) -> PinBoxStream<'_, Result<StackEvent, UpdateStackStreamError>> {
         Box::pin(update_stack_stream(self, input))
     }
 
     fn delete_stack_checked(
         &self,
         input: DeleteStackInput,
-    ) -> Pin<Box<dyn Future<Output = Result<Stack, DeleteStackCheckedError>> + '_>> {
+    ) -> PinBoxFut<'_, Result<Stack, DeleteStackCheckedError>> {
         Box::pin(delete_stack_checked(self, input))
     }
 
     fn delete_stack_stream(
         &self,
         input: DeleteStackInput,
-    ) -> Pin<Box<dyn Stream<Item = Result<StackEvent, DeleteStackStreamError>> + '_>> {
+    ) -> PinBoxStream<'_, Result<StackEvent, DeleteStackStreamError>> {
         Box::pin(delete_stack_stream(self, input))
     }
 
     fn create_change_set_checked(
         &self,
         input: CreateChangeSetInput,
-    ) -> Pin<
-        Box<dyn Future<Output = Result<DescribeChangeSetOutput, CreateChangeSetCheckedError>> + '_>,
-    > {
+    ) -> PinBoxFut<'_, Result<DescribeChangeSetOutput, CreateChangeSetCheckedError>> {
         Box::pin(create_change_set_checked(self, input))
     }
 
     fn execute_change_set_stream(
         &self,
         input: ExecuteChangeSetInput,
-    ) -> Pin<Box<dyn Stream<Item = Result<StackEvent, ExecuteChangeSetStreamError>> + '_>> {
+    ) -> PinBoxStream<'_, Result<StackEvent, ExecuteChangeSetStreamError>> {
         Box::pin(execute_change_set_stream(self, input))
     }
 }
