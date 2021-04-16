@@ -33,53 +33,6 @@ pub enum StatusSentiment {
 #[derive(Debug, Eq, PartialEq)]
 pub struct InvalidStatus;
 
-/// Possible change set statuses.
-#[derive(Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum ChangeSetStatus {
-    CreatePending,
-    CreateInProgress,
-    CreateComplete,
-    DeletePending,
-    DeleteInProgress,
-    DeleteComplete,
-    DeleteFailed,
-    Failed,
-}
-
-impl Status for ChangeSetStatus {
-    fn is_terminal(&self) -> bool {
-        match self {
-            Self::CreatePending
-            | Self::CreateInProgress
-            | Self::DeletePending
-            | Self::DeleteInProgress => false,
-            Self::CreateComplete | Self::DeleteComplete | Self::DeleteFailed | Self::Failed => true,
-        }
-    }
-
-    fn sentiment(&self) -> StatusSentiment {
-        match self {
-            Self::CreateComplete | Self::DeleteComplete => StatusSentiment::Positive,
-            Self::CreatePending
-            | Self::CreateInProgress
-            | Self::DeletePending
-            | Self::DeleteInProgress => StatusSentiment::Neutral,
-            Self::DeleteFailed | Self::Failed => StatusSentiment::Negative,
-        }
-    }
-}
-
-forward_display_to_serde!(ChangeSetStatus);
-
-impl FromStr for ChangeSetStatus {
-    type Err = InvalidStatus;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        serde_plain::from_str(s).map_err(|_| InvalidStatus)
-    }
-}
-
 /// Possible stack statuses.
 #[derive(Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
@@ -254,7 +207,6 @@ mod private {
     /// An unreachable trait used to prevent some traits from being implemented outside the crate.
     pub trait Sealed {}
 
-    impl Sealed for super::ChangeSetStatus {}
     impl Sealed for super::StackStatus {}
     impl Sealed for super::ResourceStatus {}
 }
@@ -262,20 +214,6 @@ mod private {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn change_set_status() {
-        // there's no point testing every variant, but we should check one to be sure.
-        assert_eq!(
-            format!("{}", ChangeSetStatus::CreateInProgress).as_str(),
-            "CREATE_IN_PROGRESS"
-        );
-        assert_eq!(
-            "CREATE_IN_PROGRESS".parse(),
-            Ok(ChangeSetStatus::CreateInProgress)
-        );
-        assert_eq!("oh no".parse::<ChangeSetStatus>(), Err(InvalidStatus));
-    }
 
     #[test]
     fn stack_status() {

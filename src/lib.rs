@@ -6,6 +6,4 @@ mod status;
 pub mod raw;
 
 pub use event::{StackEvent, StackEventDetails};
-pub use status::{
-    ChangeSetStatus, InvalidStatus, ResourceStatus, StackStatus, Status, StatusSentiment,
-};
+pub use status::{InvalidStatus, ResourceStatus, StackStatus, Status, StatusSentiment};
