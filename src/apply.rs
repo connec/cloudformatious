@@ -1,10 +1,13 @@
 //! An operation to 'apply' a CloudFormation template to an AWS environment.
 
-use chrono::{DateTime, Utc};
-use rusoto_cloudformation::Tag;
-use serde_plain::forward_display_to_serde;
+use std::{fmt, pin::Pin};
 
-use crate::StackStatus;
+use chrono::{DateTime, Utc};
+use rusoto_cloudformation::{CloudFormation, Tag};
+use serde_plain::forward_display_to_serde;
+use tokio_stream::Stream;
+
+use crate::{ResourceStatus, StackEvent, StackEventDetails, StackStatus};
 
 /// The input for the `apply` operation.
 #[allow(clippy::module_name_repetitions)]
@@ -199,6 +202,7 @@ pub struct Parameter {
 }
 
 /// The output of the `apply` operation.
+#[derive(Debug)]
 #[allow(clippy::module_name_repetitions)]
 pub struct ApplyOutput {
     /// The unique ID of the change set.
@@ -232,6 +236,7 @@ pub struct ApplyOutput {
 }
 
 /// An output from an `apply` operation.
+#[derive(Debug)]
 pub struct StackOutput {
     /// User defined description associated with the output.
     pub description: Option<String>,
@@ -244,4 +249,173 @@ pub struct StackOutput {
 
     /// The value associated with the output.
     pub value: String,
+}
+
+pub(crate) fn apply<Client: CloudFormation>(client: &Client, input: ApplyInput) -> Apply {
+    todo!()
+}
+
+/// An ongoing `apply` operation.
+///
+/// This implements both `Future` and `Stream`, depending on whether or not it's desired to react to
+/// stack progress or simply wait for the operation to conclude.
+pub struct Apply {
+    event_stream: Pin<Box<dyn Stream<Item = Result<ApplyEvent, ApplyError>>>>,
+}
+
+/// Events emitted by an `apply` operation.
+#[allow(clippy::module_name_repetitions)]
+pub enum ApplyEvent {
+    /// A stack event emitted by CloudFormation during the `apply` operation.
+    Event(StackEvent),
+
+    /// The output of the `apply` operation (meaning it has concluded successfully).
+    Output(ApplyOutput),
+}
+
+/// Errors emitted by an `apply` operation.
+#[derive(Debug, thiserror::Error)]
+#[allow(clippy::module_name_repetitions)]
+pub enum ApplyError {
+    /// A CloudFormation API error occurred.
+    ///
+    /// This is likely to be due to invalid input parameters or missing CloudFormation permissions.
+    /// The inner error should have a descriptive message.
+    ///
+    /// **Note:** the inner error will always be some variant of [`RusotoError`], but since they are
+    /// generic over the type of service errors we either need a variant per API used, or `Box`. If
+    /// you do need to programmatically match a particular API error you can use [`Box::downcast`].
+    CloudFormationApi(#[source] Box<dyn std::error::Error>),
+
+    /// The apply operation failed.
+    ///
+    /// This error tries to capture enough information to quickly identify the root-cause of the
+    /// operation's failure (such as not having permission to create or update a particular resource
+    /// in the stack).
+    Failure {
+        /// The ID of the stack.
+        stack_id: String,
+
+        /// The failed status in which the stack settled.
+        stack_status: StackStatus,
+
+        /// The *first* reason the stack moved into a failing state.
+        ///
+        /// Note that this is not the reason associated with the current `stack_status`, but rather
+        /// the reason for the first negative status the stack entered (which is usually more
+        /// descriptive).
+        stack_status_reason: String,
+
+        /// Resource events with negative statuses that may have precipitated the failure of the
+        /// operation.
+        ///
+        /// **Note:** this is represented as a `Vec` or tuples to avoid having to worry about
+        /// matching [`StackEvent`] variants (when it would be a logical error for them to be
+        /// anything other than the `Resource` variant).
+        resource_events: Vec<(ResourceStatus, StackEventDetails)>,
+    },
+
+    /// The apply operation succeeded with warnings.
+    ///
+    /// It is possible for resource errors to occur even when the overall operation succeeds, such
+    /// as failing to delete a resource during clean-up after a successful update. Rather than
+    /// letting this pass silently, or relying on carefully interrogating `StackEvent`s, the
+    /// operation returns an error.
+    ///
+    /// Note that the error includes the [`ApplyOutput`], since the stack did settle into a
+    /// successful status. If you don't care about non-critical resource errors you can use this to
+    /// simply map this variant away:
+    ///
+    /// ```no_run
+    /// # use rusoto_cloudformation_ext::{ApplyError, ApplyOutput};
+    /// # fn main() -> Result<(), ApplyError> {
+    /// # let output = todo!();
+    /// # let resource_events = Vec::new();
+    /// let result = Err(ApplyError::Warning { output, resource_events });
+    /// result.or_else(|error| {
+    ///     if let ApplyError::Warning { output, .. } = error {
+    ///         Ok(output)
+    ///     } else {
+    ///         Err(error)
+    ///     }
+    /// })?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    Warning {
+        /// The operation output.
+        output: ApplyOutput,
+
+        /// Resource events with negative statuses that did not affect the overall operation.
+        ///
+        /// **Note:** this is represented as a `Vec` or tuples to avoid having to worry about
+        /// matching [`StackEvent`] variants (when it would be a logical error for them to be
+        /// anything other than the `Resource` variant).
+        resource_events: Vec<(ResourceStatus, StackEventDetails)>,
+    },
+}
+
+impl fmt::Display for ApplyError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::CloudFormationApi(error) => {
+                write!(f, "CloudFormation API error: {}", error)
+            }
+            Self::Failure {
+                stack_id,
+                stack_status,
+                stack_status_reason,
+                resource_events,
+            } => {
+                write!(
+                    f,
+                    "Stack {} failed to apply; terminal status: {} ({})",
+                    stack_id, stack_status, stack_status_reason
+                )?;
+
+                if !resource_events.is_empty() {
+                    writeln!(f, "\nThe following resources had errors:")?;
+                }
+                for (resource_status, details) in resource_events {
+                    write!(
+                        f,
+                        "\n- {} ({}): {} ({})",
+                        details.logical_resource_id,
+                        details.resource_type,
+                        resource_status,
+                        details
+                            .resource_status_reason
+                            .as_deref()
+                            .unwrap_or("no reason reported"),
+                    )?;
+                }
+
+                Ok(())
+            }
+            Self::Warning {
+                output,
+                resource_events,
+            } => {
+                writeln!(
+                    f,
+                    "Stack {} applied successfully but some resources had errors:",
+                    output.stack_id
+                )?;
+                for (resource_status, details) in resource_events {
+                    write!(
+                        f,
+                        "\n- {} ({}): {} ({})",
+                        details.logical_resource_id,
+                        details.resource_type,
+                        resource_status,
+                        details
+                            .resource_status_reason
+                            .as_deref()
+                            .unwrap_or("no reason reported")
+                    )?;
+                }
+                Ok(())
+            }
+        }
+    }
 }

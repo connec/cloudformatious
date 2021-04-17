@@ -155,32 +155,32 @@ pub struct StackEventDetails {
     /// example, if you create a stack using the console, each stack event would be assigned the
     /// same token in the following format:
     /// `Console-CreateStack-7f59c3cf-00d2-40c7-b2ff-e75db0987002`.
-    client_request_token: Option<String>,
+    pub client_request_token: Option<String>,
 
     /// The unique ID of this event.
-    event_id: String,
+    pub event_id: String,
 
     /// The logical name of the resource specified in the template.
-    logical_resource_id: String,
+    pub logical_resource_id: String,
 
     /// The name or unique identifier associated with the physical instance of the resource.
     ///
     /// This is unset when a physical resource does not exist, e.g. when creation is still in
     /// progress or has failed.
-    physical_resource_id: Option<String>,
+    pub physical_resource_id: Option<String>,
 
     /// Success/failure message associated with the resource.
-    resource_status_reason: Option<String>,
+    pub resource_status_reason: Option<String>,
 
     /// Type of resource.
-    resource_type: String,
+    pub resource_type: String,
 
     /// The unique ID of the instance of the stack.
-    stack_id: String,
+    pub stack_id: String,
 
     /// The name associated with the stack.
-    stack_name: String,
+    pub stack_name: String,
 
     /// Time the status was updated.
-    timestamp: DateTime<Utc>,
+    pub timestamp: DateTime<Utc>,
 }
