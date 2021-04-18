@@ -1,15 +1,22 @@
 //! An operation to 'apply' a CloudFormation template to an AWS environment.
 
-use std::{fmt, pin::Pin};
+use std::{fmt, future::Future, pin::Pin, task};
 
+use async_stream::try_stream;
 use chrono::{DateTime, Utc};
-use rusoto_cloudformation::{CloudFormation, Tag};
+use futures_util::{pin_mut, Stream, TryFutureExt, TryStreamExt};
+use rusoto_cloudformation::{
+    CloudFormation, CreateChangeSetInput, DescribeStacksInput, ExecuteChangeSetInput, Stack, Tag,
+};
+use rusoto_core::RusotoError;
 use serde_plain::forward_display_to_serde;
-use tokio_stream::Stream;
 
-use crate::{ResourceStatus, StackEvent, StackEventDetails, StackStatus};
+use crate::change_set::{create_change_set, ChangeSet};
+use crate::raw::CloudFormationExt;
+use crate::{ChangeSetStatus, ResourceStatus, StackEvent, StackEventDetails, StackStatus, Status};
 
 /// The input for the `apply` operation.
+#[derive(Clone, Debug)]
 #[allow(clippy::module_name_repetitions)]
 pub struct ApplyInput {
     /// Capabilities to explicitly acknowledge.
@@ -114,6 +121,30 @@ pub struct ApplyInput {
     pub template_url: Option<String>,
 }
 
+impl ApplyInput {
+    fn into_raw(self) -> CreateChangeSetInput {
+        CreateChangeSetInput {
+            capabilities: Some(self.capabilities.iter().map(ToString::to_string).collect()),
+            change_set_name: format!("apply-{}", Utc::now().timestamp_millis()),
+            change_set_type: Some("CREATE".to_string()),
+            notification_ar_ns: Some(self.notification_arns),
+            parameters: Some(
+                self.parameters
+                    .into_iter()
+                    .map(Parameter::into_raw)
+                    .collect(),
+            ),
+            resource_types: self.resource_types,
+            role_arn: self.role_arn,
+            stack_name: self.stack_name,
+            tags: Some(self.tags),
+            template_body: self.template_body,
+            template_url: self.template_url,
+            ..CreateChangeSetInput::default()
+        }
+    }
+}
+
 /// In some cases, you must explicitly acknowledge that your stack template contains certain
 /// capabilities in order for AWS CloudFormation to create (or update) the stack.
 ///
@@ -172,7 +203,7 @@ pub struct ApplyInput {
 /// [2]: http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/template-macros.html
 /// [`AWS::Include`]: http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/create-reusable-transform-function-snippets-and-add-to-your-template-with-aws-include-transform.html
 /// [`AWS::Serverless`]: http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/transform-aws-serverless.html
-#[derive(serde::Serialize)]
+#[derive(Clone, Copy, Debug, serde::Serialize)]
 pub enum Capability {
     /// Acknowledge IAM resources (*without* custom names only).
     #[serde(rename = "CAPABILITY_IAM")]
@@ -193,6 +224,7 @@ forward_display_to_serde!(Capability);
 ///
 /// Note that, unlike when directly updating a stack, it is not possible to reuse previous
 /// values of parameters.
+#[derive(Clone, Debug)]
 pub struct Parameter {
     /// The key associated with the parameter.
     pub key: String,
@@ -201,8 +233,18 @@ pub struct Parameter {
     pub value: String,
 }
 
+impl Parameter {
+    fn into_raw(self) -> rusoto_cloudformation::Parameter {
+        rusoto_cloudformation::Parameter {
+            parameter_key: Some(self.key),
+            parameter_value: Some(self.value),
+            ..rusoto_cloudformation::Parameter::default()
+        }
+    }
+}
+
 /// The output of the `apply` operation.
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 #[allow(clippy::module_name_repetitions)]
 pub struct ApplyOutput {
     /// The unique ID of the change set.
@@ -235,8 +277,45 @@ pub struct ApplyOutput {
     pub tags: Vec<Tag>,
 }
 
+impl ApplyOutput {
+    fn from_raw(stack: Stack) -> Self {
+        Self {
+            change_set_id: stack.change_set_id.expect("Stack without change_set_id"),
+            creation_time: DateTime::parse_from_rfc3339(&stack.creation_time)
+                .expect("Stack invalid creation_time")
+                .into(),
+            description: stack.description,
+            last_updated_time: stack.last_updated_time.as_deref().map(|last_updated_time| {
+                DateTime::parse_from_rfc3339(last_updated_time)
+                    .expect("Stack invalid last_updated_time")
+                    .into()
+            }),
+            outputs: stack
+                .outputs
+                .map(|outputs| {
+                    outputs
+                        .into_iter()
+                        .map(|output| StackOutput {
+                            description: output.description,
+                            export_name: output.export_name,
+                            key: output.output_key.expect("StackOutput without output_key"),
+                            value: output
+                                .output_value
+                                .expect("StackOutput without output_value"),
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
+            stack_id: stack.stack_id.expect("Stack without stack_id"),
+            stack_name: stack.stack_name,
+            stack_status: stack.stack_status.parse().expect("invalid stack status"),
+            tags: stack.tags.unwrap_or_default(),
+        }
+    }
+}
+
 /// An output from an `apply` operation.
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct StackOutput {
     /// User defined description associated with the output.
     pub description: Option<String>,
@@ -249,18 +328,6 @@ pub struct StackOutput {
 
     /// The value associated with the output.
     pub value: String,
-}
-
-pub(crate) fn apply<Client: CloudFormation>(client: &Client, input: ApplyInput) -> Apply {
-    todo!()
-}
-
-/// An ongoing `apply` operation.
-///
-/// This implements both `Future` and `Stream`, depending on whether or not it's desired to react to
-/// stack progress or simply wait for the operation to conclude.
-pub struct Apply {
-    event_stream: Pin<Box<dyn Stream<Item = Result<ApplyEvent, ApplyError>>>>,
 }
 
 /// Events emitted by an `apply` operation.
@@ -286,6 +353,22 @@ pub enum ApplyError {
     /// generic over the type of service errors we either need a variant per API used, or `Box`. If
     /// you do need to programmatically match a particular API error you can use [`Box::downcast`].
     CloudFormationApi(#[source] Box<dyn std::error::Error>),
+
+    /// The change set failed to create.
+    ///
+    /// Change sets are created asynchronously and may settle in a `FAILED` state. Trying to execute
+    /// a `FAILED` change set will fail (who would have guessed). This error includes details of the
+    /// failing change set to help diagnose errors.
+    CreateChangeSetFailed {
+        /// The id of the failed change set.
+        id: String,
+
+        /// The status of the failed change set.
+        status: ChangeSetStatus,
+
+        /// The reason the change set failed to create.
+        status_reason: String,
+    },
 
     /// The apply operation failed.
     ///
@@ -355,11 +438,28 @@ pub enum ApplyError {
     },
 }
 
+impl ApplyError {
+    fn from_rusoto_error<E: std::error::Error + 'static>(error: RusotoError<E>) -> Self {
+        Self::CloudFormationApi(error.into())
+    }
+}
+
 impl fmt::Display for ApplyError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::CloudFormationApi(error) => {
                 write!(f, "CloudFormation API error: {}", error)
+            }
+            Self::CreateChangeSetFailed {
+                id,
+                status,
+                status_reason,
+            } => {
+                write!(
+                    f,
+                    "Change set {} failed to create; terminal status: {} ({})",
+                    id, status, status_reason
+                )
             }
             Self::Failure {
                 stack_id,
@@ -418,4 +518,199 @@ impl fmt::Display for ApplyError {
             }
         }
     }
+}
+
+/// An ongoing `apply` operation.
+///
+/// This implements both `Future` and `Stream`, depending on whether or not it's desired to react to
+/// stack progress or simply wait for the operation to conclude.
+pub struct Apply<'client> {
+    event_stream: Pin<Box<dyn Stream<Item = Result<ApplyEvent, ApplyError>> + 'client>>,
+
+    // The `ApplyOutput` is moved here once it's been emitted by the stream.
+    output: Option<ApplyOutput>,
+}
+
+impl Future for Apply<'_> {
+    type Output = Result<ApplyOutput, ApplyError>;
+
+    fn poll(mut self: Pin<&mut Self>, ctx: &mut task::Context) -> task::Poll<Self::Output> {
+        loop {
+            match self.event_stream.as_mut().poll_next(ctx) {
+                task::Poll::Pending => return task::Poll::Pending,
+                task::Poll::Ready(Some(Err(error))) => return task::Poll::Ready(Err(error)),
+                task::Poll::Ready(Some(Ok(ApplyEvent::Event(_)))) => continue,
+                task::Poll::Ready(Some(Ok(ApplyEvent::Output(output)))) => {
+                    self.output.replace(output);
+                    continue;
+                }
+                task::Poll::Ready(None) => {
+                    return task::Poll::Ready(Ok(self
+                        .output
+                        .take()
+                        .expect("end of stream without output")))
+                }
+            }
+        }
+    }
+}
+
+impl<'client> Apply<'client> {
+    pub(crate) fn new<Client: CloudFormation>(
+        client: &'client Client,
+        mut input: ApplyInput,
+    ) -> Self {
+        let event_stream = try_stream! {
+            input
+                .client_request_token
+                .get_or_insert_with(|| format!("apply-{}", Utc::now().timestamp_millis()));
+
+            let change_set = match create_change_set_internal(client, input).await? {
+                Ok(change_set) => change_set,
+                Err(change_set) => {
+                    let output = describe_output(client, change_set.stack_id).await?;
+                    yield ApplyEvent::Output(output);
+                    return;
+                },
+            };
+            let stack_id = change_set.stack_id.clone();
+
+            let event_stream = execute_change_set(client, change_set);
+            pin_mut!(event_stream);
+
+            let mut stack_error_status = None;
+            let mut stack_error_status_reason = None;
+            let mut resource_error_events = Vec::new();
+            while let Some(event) = event_stream.try_next().await? {
+                match event {
+                    StackEvent::Stack {
+                        resource_status, ..
+                    } if resource_status.is_terminal()
+                        && resource_status.sentiment().is_negative() =>
+                    {
+                        stack_error_status = Some(resource_status);
+                    }
+                    StackEvent::Stack {
+                        resource_status,
+                        details:
+                            StackEventDetails {
+                                resource_status_reason: Some(ref reason),
+                                ..
+                            },
+                    } if resource_status.sentiment().is_negative()
+                        && stack_error_status_reason.is_none() =>
+                    {
+                        stack_error_status_reason.replace(reason.to_string());
+                    }
+                    StackEvent::Resource {
+                        resource_status,
+                        ref details,
+                    } if resource_status.sentiment().is_negative() => {
+                        resource_error_events.push((resource_status, details.clone()));
+                    }
+                    _ => {}
+                }
+                yield ApplyEvent::Event(event);
+            }
+
+            if let Some(stack_status) = stack_error_status {
+                Err(ApplyError::Failure {
+                    stack_id,
+                    stack_status,
+                    stack_status_reason: stack_error_status_reason
+                        .expect("stack op failed with no reasons"),
+                    resource_events: resource_error_events,
+                })?;
+                unreachable!()
+            }
+
+            let output = describe_output(client, stack_id).await?;
+            if resource_error_events.is_empty() {
+                yield ApplyEvent::Output(output);
+            } else {
+                Err(ApplyError::Warning {
+                    output,
+                    resource_events: resource_error_events,
+                })?;
+                unreachable!()
+            }
+        };
+        Self {
+            event_stream: Box::pin(event_stream),
+            output: None,
+        }
+    }
+}
+
+async fn create_change_set_internal<Client: CloudFormation>(
+    client: &Client,
+    input: ApplyInput,
+) -> Result<Result<ChangeSet, ChangeSet>, ApplyError> {
+    let change_set = create_change_set(client, input.into_raw())
+        .map_err(ApplyError::from_rusoto_error)
+        .await?
+        .map_err(ApplyError::from_rusoto_error)
+        .await?
+        .map(Ok)
+        .or_else(|change_set| {
+            if change_set
+                .status_reason
+                .as_deref()
+                .unwrap_or_default()
+                .contains("The submitted information didn't contain changes.")
+            {
+                Ok(Err(change_set))
+            } else {
+                Err(ApplyError::CreateChangeSetFailed {
+                    id: change_set.id,
+                    status: change_set.status,
+                    status_reason: change_set
+                        .status_reason
+                        .expect("ChangeSet failed without reason"),
+                })
+            }
+        })?;
+    Ok(change_set)
+}
+
+fn execute_change_set<Client: CloudFormation>(
+    client: &Client,
+    change_set: ChangeSet,
+) -> impl Stream<Item = Result<StackEvent, ApplyError>> + '_ {
+    try_stream! {
+        let execute_change_set_input = ExecuteChangeSetInput {
+            change_set_name: change_set.id,
+            ..ExecuteChangeSetInput::default()
+        };
+        let mut events = client
+            .execute_change_set_stream(change_set.stack_id, execute_change_set_input)
+            .map_err(ApplyError::from_rusoto_error)
+            .await?;
+        while let Some(event) = events
+            .try_next()
+            .map_err(ApplyError::from_rusoto_error)
+            .await?
+        {
+            yield StackEvent::from_raw(event);
+        }
+    }
+}
+
+async fn describe_output<Client: CloudFormation>(
+    client: &Client,
+    stack_id: String,
+) -> Result<ApplyOutput, ApplyError> {
+    let describe_stacks_input = DescribeStacksInput {
+        stack_name: Some(stack_id),
+        ..DescribeStacksInput::default()
+    };
+    let stack = client
+        .describe_stacks(describe_stacks_input)
+        .map_err(ApplyError::from_rusoto_error)
+        .await?
+        .stacks
+        .expect("DescribeStacksOutput without stacks")
+        .pop()
+        .expect("DescribeStacksOutput empty stacks");
+    Ok(ApplyOutput::from_raw(stack))
 }

@@ -19,7 +19,7 @@ type CreateChangeSetResult = Result<
     // The nested `Result` is intended to make it hard to ignore the status of the resulting change
     // set and going on to, e.g., try to execute a failed change set. The `Option` indicates the
     // case where creation failed due to no changes being present.
-    Result<Option<ChangeSet>, ChangeSet>,
+    Result<ChangeSet, ChangeSet>,
     RusotoError<DescribeChangeSetError>,
 >;
 
@@ -90,10 +90,7 @@ pub(crate) async fn create_change_set<Client: CloudFormation>(
             let change_set = ChangeSet::from_raw(change_set);
             match change_set.status {
                 ChangeSetStatus::CreatePending | ChangeSetStatus::CreateInProgress => continue,
-                ChangeSetStatus::CreateComplete => return Ok(Ok(Some(change_set))),
-                ChangeSetStatus::Failed if is_no_changes(&change_set.status_reason) => {
-                    return Ok(Ok(None))
-                }
+                ChangeSetStatus::CreateComplete => return Ok(Ok(change_set)),
                 ChangeSetStatus::Failed => return Ok(Err(change_set)),
                 _ => {
                     panic!(
@@ -110,11 +107,4 @@ fn is_already_exists(response: &BufferedHttpResponse) -> bool {
     TwoWaySearcher::new(b" already exists ")
         .search_in(&response.body)
         .is_some()
-}
-
-fn is_no_changes(status_reason: &Option<String>) -> bool {
-    status_reason
-        .as_deref()
-        .unwrap_or_default()
-        .contains("The submitted information didn't contain changes.")
 }

@@ -23,18 +23,86 @@ pub trait Status: std::fmt::Debug + std::fmt::Display + private::Sealed {
 }
 
 /// An indication of whether a status is positive, negative, or neutral for the affected resource.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum StatusSentiment {
     Positive,
     Neutral,
     Negative,
 }
 
+impl StatusSentiment {
+    /// Is the sentiment positive?
+    #[must_use]
+    pub fn is_positive(self) -> bool {
+        self == Self::Positive
+    }
+
+    /// Is the sentiment neutral?
+    #[must_use]
+    pub fn is_neutral(self) -> bool {
+        self == Self::Neutral
+    }
+
+    /// Is the sentiment negative?
+    #[must_use]
+    pub fn is_negative(self) -> bool {
+        self == Self::Negative
+    }
+}
+
 /// An error marker returned when trying to parse an invalid status.
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct InvalidStatus;
 
+/// Possible change set statuses.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum ChangeSetStatus {
+    CreatePending,
+    CreateInProgress,
+    CreateComplete,
+    DeletePending,
+    DeleteInProgress,
+    DeleteComplete,
+    DeleteFailed,
+    Failed,
+}
+
+impl Status for ChangeSetStatus {
+    fn is_terminal(&self) -> bool {
+        match self {
+            Self::CreatePending
+            | Self::CreateInProgress
+            | Self::DeletePending
+            | Self::DeleteInProgress => false,
+            Self::CreateComplete | Self::DeleteComplete | Self::DeleteFailed | Self::Failed => true,
+        }
+    }
+
+    fn sentiment(&self) -> StatusSentiment {
+        match self {
+            Self::CreateComplete | Self::DeleteComplete => StatusSentiment::Positive,
+            Self::CreatePending
+            | Self::CreateInProgress
+            | Self::DeletePending
+            | Self::DeleteInProgress => StatusSentiment::Neutral,
+            Self::DeleteFailed | Self::Failed => StatusSentiment::Negative,
+        }
+    }
+}
+
+forward_display_to_serde!(ChangeSetStatus);
+
+impl FromStr for ChangeSetStatus {
+    type Err = InvalidStatus;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        serde_plain::from_str(s).map_err(|_| InvalidStatus)
+    }
+}
+
 /// Possible stack statuses.
-#[derive(Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum StackStatus {
     CreateInProgress,
@@ -128,7 +196,7 @@ impl FromStr for StackStatus {
 }
 
 /// Possible resource statuses.
-#[derive(Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum ResourceStatus {
     CreateInProgress,
@@ -207,6 +275,7 @@ mod private {
     /// An unreachable trait used to prevent some traits from being implemented outside the crate.
     pub trait Sealed {}
 
+    impl Sealed for super::ChangeSetStatus {}
     impl Sealed for super::StackStatus {}
     impl Sealed for super::ResourceStatus {}
 }
