@@ -10,6 +10,9 @@ use std::{future::Future, pin::Pin, time::Duration};
 
 use async_stream::try_stream;
 use chrono::{DateTime, Utc};
+use futures_util::Stream;
+use futures_util::TryFutureExt;
+use memmem::{Searcher, TwoWaySearcher};
 use rusoto_cloudformation::{
     CloudFormation, CreateChangeSetError, CreateChangeSetInput, DescribeChangeSetError,
     DescribeChangeSetInput, DescribeChangeSetOutput, DescribeStackEventsError,
@@ -17,7 +20,6 @@ use rusoto_cloudformation::{
 };
 use rusoto_core::RusotoError;
 use tokio::time::Instant;
-use tokio_stream::Stream;
 
 /// In-progress statuses for stack creation.
 const CREATE_STACK_PROGRESS_STATUSES: &[&str] = &[
@@ -136,13 +138,28 @@ where
 
 async fn create_change_set_wait<Client: CloudFormation>(
     client: &Client,
-    input: CreateChangeSetInput,
+    mut input: CreateChangeSetInput,
 ) -> Result<
     PinBoxFut<'_, Result<DescribeChangeSetOutput, RusotoError<DescribeChangeSetError>>>,
     RusotoError<CreateChangeSetError>,
 > {
+    let is_create = input.change_set_type.as_deref() == Some("CREATE");
     let change_set_id = client
-        .create_change_set(input)
+        .create_change_set(input.clone())
+        .or_else(|error| async move {
+            match error {
+                RusotoError::Unknown(response)
+                    if is_create
+                        && TwoWaySearcher::new(b" already exists ")
+                            .search_in(&response.body)
+                            .is_some() =>
+                {
+                    input.change_set_type = Some("UPDATE".to_string());
+                    client.create_change_set(input).await
+                }
+                error => Err(error),
+            }
+        })
         .await?
         .id
         .expect("CreateChangeSetOutput without id");

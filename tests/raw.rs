@@ -155,6 +155,20 @@ async fn execute_change_set_stream() -> Result<(), Box<dyn Error>> {
         .await?;
     assert_eq!(change_set.status.as_deref(), Some("CREATE_COMPLETE"));
 
+    // Change set retried for update
+    let create_change_set_input = CreateChangeSetInput {
+        stack_name: stack_name.clone(),
+        change_set_name: generated_name(),
+        change_set_type: Some("CREATE".to_string()),
+        template_body: Some(FAILING_TEMPLATE.to_string()),
+        ..CreateChangeSetInput::default()
+    };
+    let change_set = client
+        .create_change_set_wait(create_change_set_input)
+        .await?
+        .await?;
+    assert_eq!(change_set.status.as_deref(), Some("CREATE_COMPLETE"));
+
     // Failed execution
     let execute_change_set_input = ExecuteChangeSetInput {
         change_set_name: change_set.change_set_id.unwrap(),
