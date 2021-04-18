@@ -11,11 +11,9 @@ use std::{future::Future, pin::Pin, time::Duration};
 use async_stream::try_stream;
 use chrono::{DateTime, Utc};
 use rusoto_cloudformation::{
-    CloudFormation, CreateChangeSetError, CreateChangeSetInput, CreateStackError, CreateStackInput,
-    DeleteStackError, DeleteStackInput, DescribeChangeSetError, DescribeChangeSetInput,
-    DescribeChangeSetOutput, DescribeStackEventsError, DescribeStackEventsInput,
-    DescribeStacksError, DescribeStacksInput, ExecuteChangeSetError, ExecuteChangeSetInput,
-    StackEvent, UpdateStackError, UpdateStackInput,
+    CloudFormation, CreateChangeSetError, CreateChangeSetInput, DescribeChangeSetError,
+    DescribeChangeSetInput, DescribeChangeSetOutput, DescribeStackEventsError,
+    DescribeStackEventsInput, ExecuteChangeSetError, ExecuteChangeSetInput, StackEvent,
 };
 use rusoto_core::RusotoError;
 use tokio::time::Instant;
@@ -47,12 +45,6 @@ const UPDATE_STACK_TERMINAL_STATUSES: &[&str] = &[
     "UPDATE_ROLLBACK_COMPLETE",
 ];
 
-/// In-progress statuses for stack delete.
-const DELETE_STACK_PROGRESS_STATUSES: &[&str] = &["DELETE_IN_PROGRESS"];
-
-/// Terminal statuses for stack delete.
-const DELETE_STACK_TERMINAL_STATUSES: &[&str] = &["DELETE_COMPLETE", "DELETE_FAILED"];
-
 /// In-progress statuses for change set creation.
 const CREATE_CHANGE_SET_PROGRESS_STATUSES: &[&str] = &["CREATE_PENDING", "CREATE_IN_PROGRESS"];
 
@@ -69,75 +61,6 @@ pub type StackEventStream<'a> =
 /// [`rusoto_cloudformation::CloudFormation`] extension trait that works directly with
 /// `rusoto_cloudformation` types.
 pub trait CloudFormationExt {
-    /// Create a stack and return a stream of relevant stack events.
-    ///
-    /// This will call the `CreateStack` API to commence stack creation. If that returns
-    /// successfully the `DescribeStackEvents` API is polled and the events are emitted through the
-    /// returned `Stream`. The stream ends when the stack reaches a settled state.
-    ///
-    /// # Errors
-    ///
-    /// The returned `Future` will resolve to an `Err` if the `CreateStack` API fails. Since any
-    /// attempt to poll the `DescribeStackEvents` API might fail, each event is wrapped in a
-    /// `Result` and so must be checked for errors.
-    ///
-    /// # Panics
-    ///
-    /// This will panic if the stack enters a status that is unexpected for creation. This would be
-    /// a bug in CloudFormation itself or (more likely) a misunderstanding of its semantics that
-    /// would require this library to be updated!
-    fn create_stack_stream(
-        &self,
-        input: CreateStackInput,
-    ) -> PinBoxFut<Result<StackEventStream, RusotoError<CreateStackError>>>;
-
-    /// Update a stack and return a stream of relevant stack events.
-    ///
-    /// This will call the `UpdateStack` API to commence the stack update. If that returns
-    /// successfully the `DescribeStackEvents` API is polled and the events are emitted through the
-    /// returned `Stream`. The stream ends when the stack reaches a settled state.
-    ///
-    /// # Errors
-    ///
-    /// The returned `Future` will resolve to an `Err` if the `UpdateStack` API fails. Since any
-    /// attempt to poll the `DescribeStackEvents` API might fail, each event is wrapped in a
-    /// `Result` and so must be checked for errors.
-    ///
-    /// # Panics
-    ///
-    /// This will panic if the stack enters a status that is unexpected for updating. This would be
-    /// a bug in CloudFormation itself or (more likely) a misunderstanding of its semantics that
-    /// would require this library to be updated!
-    fn update_stack_stream(
-        &self,
-        input: UpdateStackInput,
-    ) -> PinBoxFut<Result<StackEventStream, RusotoError<UpdateStackError>>>;
-
-    /// Delete a stack and return a stream of relevant stack events.
-    ///
-    /// This will call the `DescribeStacks` API to get the stack ID, followed by the `DeleteStack`
-    /// API to commence the stack deletion. If those return successfully the `DescribeStackEvents`
-    /// API is polled and the events are emitted through the returned `Stream`. The stream ends when
-    /// the stack reaches a settled state.
-    ///
-    /// # Errors
-    ///
-    /// The returned `Future` will resolve to an `Err` if the `DescribeStacks` or `DeleteStack` APIs
-    /// fail. Since any attempt to poll the `DescribeStackEvents` API might fail, each event is
-    /// wrapped in a `Result` and so must be checked for errors.
-    ///
-    /// Note that no error is returned if the stack does not exist.
-    ///
-    /// # Panics
-    ///
-    /// This will panic if the stack enters a status that is unexpected for updating. This would be
-    /// a bug in CloudFormation itself or (more likely) a misunderstanding of its semantics that
-    /// would require this library to be updated!
-    fn delete_stack_stream(
-        &self,
-        input: DeleteStackInput,
-    ) -> PinBoxFut<Result<StackEventStream, DeleteStackStreamError>>;
-
     /// Create a change set and wait for it to become available.
     ///
     /// This will call the `CreateChangeSet` API, but that only begins the creation process. If
@@ -188,27 +111,6 @@ impl<T> CloudFormationExt for T
 where
     T: CloudFormation,
 {
-    fn create_stack_stream(
-        &self,
-        input: CreateStackInput,
-    ) -> PinBoxFut<Result<StackEventStream, RusotoError<CreateStackError>>> {
-        Box::pin(create_stack_stream(self, input))
-    }
-
-    fn update_stack_stream(
-        &self,
-        input: UpdateStackInput,
-    ) -> PinBoxFut<Result<StackEventStream, RusotoError<UpdateStackError>>> {
-        Box::pin(update_stack_stream(self, input))
-    }
-
-    fn delete_stack_stream(
-        &self,
-        input: DeleteStackInput,
-    ) -> PinBoxFut<Result<StackEventStream, DeleteStackStreamError>> {
-        Box::pin(delete_stack_stream(self, input))
-    }
-
     fn create_change_set_wait(
         &self,
         input: CreateChangeSetInput,
@@ -221,239 +123,6 @@ where
         input: ExecuteChangeSetInput,
     ) -> PinBoxFut<Result<StackEventStream, ExecuteChangeSetStreamError>> {
         Box::pin(execute_change_set_stream(self, input))
-    }
-}
-
-async fn create_stack_stream<Client: CloudFormation>(
-    client: &Client,
-    input: CreateStackInput,
-) -> Result<StackEventStream<'_>, RusotoError<CreateStackError>> {
-    let mut event_cutoff = format_timestamp(Utc::now());
-    let stack_id = client
-        .create_stack(input)
-        .await?
-        .stack_id
-        .expect("CreateStackOutput without stack_id");
-
-    let describe_stack_events_input = DescribeStackEventsInput {
-        stack_name: Some(stack_id.clone()),
-        ..DescribeStackEventsInput::default()
-    };
-    let mut interval = tokio::time::interval_at(
-        Instant::now() + Duration::from_secs(5),
-        Duration::from_secs(5),
-    );
-
-    Ok(Box::pin(try_stream! {
-        loop {
-            interval.tick().await;
-
-            let stack_events: Vec<_> = client
-                .describe_stack_events(describe_stack_events_input.clone())
-                .await?
-                .stack_events
-                .expect("DescribeStackEventsOutput without stack_events")
-                .into_iter()
-                .take_while(|event| event.timestamp > event_cutoff)
-                .collect();
-
-            if let Some(stack_event) = stack_events.first() {
-                event_cutoff = stack_event.timestamp.clone();
-            }
-
-            for stack_event in stack_events.into_iter().rev() {
-                if stack_event.physical_resource_id.as_ref() != Some(&stack_id) {
-                    yield stack_event;
-                } else {
-                    let stack_status = stack_event
-                        .resource_status
-                        .as_deref()
-                        .expect("StackEvent without resource_status");
-                    if CREATE_STACK_PROGRESS_STATUSES.contains(&stack_status) {
-                        yield stack_event;
-                        continue;
-                    }
-                    if CREATE_STACK_TERMINAL_STATUSES.contains(&stack_status) {
-                        yield stack_event;
-                        return;
-                    }
-                    panic!(
-                        "stack {} has inconsistent status for create: {}",
-                        stack_id, stack_status
-                    );
-                }
-            }
-        }
-    }))
-}
-
-async fn update_stack_stream<Client: CloudFormation>(
-    client: &Client,
-    input: UpdateStackInput,
-) -> Result<StackEventStream<'_>, RusotoError<UpdateStackError>> {
-    let mut event_cutoff = format_timestamp(Utc::now());
-    let stack_id = client
-        .update_stack(input)
-        .await?
-        .stack_id
-        .expect("UpdateStackOutput without stack_id");
-
-    let describe_stack_events_input = DescribeStackEventsInput {
-        stack_name: Some(stack_id.clone()),
-        ..DescribeStackEventsInput::default()
-    };
-    let mut interval = tokio::time::interval_at(
-        Instant::now() + Duration::from_secs(5),
-        Duration::from_secs(5),
-    );
-
-    Ok(Box::pin(try_stream! {
-        loop {
-            interval.tick().await;
-
-            let stack_events: Vec<_> = client
-                .describe_stack_events(describe_stack_events_input.clone())
-                .await?
-                .stack_events
-                .expect("DescribeStackEventsOutput without stack_events")
-                .into_iter()
-                .take_while(|event| event.timestamp > event_cutoff)
-                .collect();
-
-            if let Some(stack_event) = stack_events.first() {
-                event_cutoff = stack_event.timestamp.clone();
-            }
-
-            for stack_event in stack_events.into_iter().rev() {
-                if stack_event.physical_resource_id.as_ref() != Some(&stack_id) {
-                    yield stack_event;
-                } else {
-                    let stack_status = stack_event
-                        .resource_status
-                        .as_deref()
-                        .expect("StackEvent without resource_status");
-                    if UPDATE_STACK_PROGRESS_STATUSES.contains(&stack_status) {
-                        yield stack_event;
-                        continue;
-                    }
-                    if UPDATE_STACK_TERMINAL_STATUSES.contains(&stack_status) {
-                        yield stack_event;
-                        return;
-                    }
-                    panic!(
-                        "stack {} has inconsistent status for update: {}",
-                        stack_id, stack_status
-                    );
-                }
-            }
-        }
-    }))
-}
-
-/// Errors that can be returned by [`delete_stack_stream`].
-///
-/// [`delete_stack_stream`]: CloudFormationExt::delete_stack_stream
-#[derive(Debug, thiserror::Error)]
-pub enum DeleteStackStreamError {
-    /// The `DescribeStacks` operation returned an error.
-    #[error("{0}")]
-    DescribeStacks(#[from] RusotoError<DescribeStacksError>),
-
-    /// The `DeleteStack` operation returned an error.
-    #[error("{0}")]
-    DeleteStack(#[from] RusotoError<DeleteStackError>),
-}
-
-async fn delete_stack_stream<Client: CloudFormation>(
-    client: &Client,
-    input: DeleteStackInput,
-) -> Result<StackEventStream<'_>, DeleteStackStreamError> {
-    let describe_stacks_input = DescribeStacksInput {
-        stack_name: Some(input.stack_name.clone()),
-        ..DescribeStacksInput::default()
-    };
-    let stack = client
-        .describe_stacks(describe_stacks_input)
-        .await
-        .map(|output| {
-            Some(
-                output
-                    .stacks
-                    .expect("DescribeStacksOutput without stacks")
-                    .pop()
-                    .expect("DescribeStacksOutput with stack_name parameter had no stacks"),
-            )
-        })
-        .or_else(|error| match error {
-            RusotoError::Unknown(inner) => match std::str::from_utf8(&inner.body) {
-                Ok(body) if body.contains(&input.stack_name) && body.contains("does not exist") => {
-                    Ok(None)
-                }
-                _ => Err(RusotoError::Unknown(inner)),
-            },
-            _ => Err(error),
-        })?;
-    match stack {
-        Some(stack) if stack.stack_status != "DELETE_COMPLETE" => {
-            let stack_id = stack.stack_id.expect("Stack without stack_id");
-            let mut event_cutoff = format_timestamp(Utc::now());
-            client.delete_stack(input).await?;
-
-            let describe_stack_events_input = DescribeStackEventsInput {
-                stack_name: Some(stack_id.clone()),
-                ..DescribeStackEventsInput::default()
-            };
-            let mut interval = tokio::time::interval_at(
-                Instant::now() + Duration::from_secs(5),
-                Duration::from_secs(5),
-            );
-
-            Ok(Box::pin(try_stream! {
-                loop {
-                    interval.tick().await;
-
-                    let stack_events: Vec<_> = client
-                        .describe_stack_events(describe_stack_events_input.clone())
-                        .await?
-                        .stack_events
-                        .expect("DescribeStackEventsOutput without stack_events")
-                        .into_iter()
-                        .take_while(|event| event.timestamp > event_cutoff)
-                        .collect();
-
-                    if let Some(stack_event) = stack_events.first() {
-                        event_cutoff = stack_event.timestamp.clone();
-                    }
-
-                    for stack_event in stack_events.into_iter().rev() {
-                        if stack_event.physical_resource_id.as_ref() != Some(&stack_id) {
-                            yield stack_event;
-                        } else {
-                            let stack_status = stack_event
-                                .resource_status
-                                .as_deref()
-                                .expect("StackEvent without resource_status");
-                            if DELETE_STACK_PROGRESS_STATUSES.contains(&stack_status) {
-                                yield stack_event;
-                                continue;
-                            }
-                            if DELETE_STACK_TERMINAL_STATUSES.contains(&stack_status) {
-                                yield stack_event;
-                                return;
-                            }
-                            panic!(
-                                "stack {} has inconsistent status for update: {}",
-                                stack_id, stack_status
-                            );
-                        }
-                    }
-                }
-            }))
-        }
-        _ => {
-            // Stack is already deleted so we return an empty stream.
-            Ok(Box::pin(tokio_stream::empty()))
-        }
     }
 }
 

@@ -1,8 +1,8 @@
 use std::{env, error::Error, time::Duration};
 
 use rusoto_cloudformation::{
-    CloudFormation, CloudFormationClient, CreateChangeSetInput, CreateStackInput, DeleteStackInput,
-    ExecuteChangeSetInput, StackEvent, Tag, UpdateStackInput,
+    CloudFormation, CloudFormationClient, CreateChangeSetInput, DeleteStackInput,
+    ExecuteChangeSetInput,
 };
 use rusoto_core::HttpClient;
 use rusoto_credential::{AutoRefreshingProvider, ChainProvider};
@@ -34,243 +34,6 @@ const FAILING_TEMPLATE: &str = r#"
             "#;
 
 #[tokio::test]
-async fn create_stack_stream() -> Result<(), Box<dyn Error>> {
-    let client = get_client();
-
-    // Successful create
-    let create_stack_input = CreateStackInput {
-        stack_name: generated_name(),
-        template_body: Some(DUMMY_TEMPLATE.to_string()),
-        ..CreateStackInput::default()
-    };
-    let stack_events: Vec<StackEvent> = client
-        .create_stack_stream(create_stack_input)
-        .await?
-        .collect::<Result<_, _>>()
-        .await?;
-    let resource_statuses: Vec<_> = stack_events
-        .iter()
-        .map(|stack_event| stack_event.resource_status.as_deref().unwrap())
-        .collect();
-    assert_eq!(
-        resource_statuses,
-        vec!["CREATE_IN_PROGRESS", "CREATE_COMPLETE"]
-    );
-
-    // Clean-up
-    client
-        .delete_stack(DeleteStackInput {
-            stack_name: stack_events.last().unwrap().stack_name.to_string(),
-            ..DeleteStackInput::default()
-        })
-        .await?;
-
-    // Failed create
-    let stack_name = generated_name();
-    let create_stack_input = CreateStackInput {
-        stack_name: stack_name.clone(),
-        template_body: Some(FAILING_TEMPLATE.to_string()),
-        ..CreateStackInput::default()
-    };
-    let stack_events: Vec<StackEvent> = client
-        .create_stack_stream(create_stack_input)
-        .await?
-        .collect::<Result<_, _>>()
-        .await?;
-    let resource_statuses: Vec<_> = stack_events
-        .iter()
-        .map(|stack_event| {
-            (
-                stack_event.logical_resource_id.as_deref().unwrap(),
-                stack_event.resource_status.as_deref().unwrap(),
-            )
-        })
-        .collect();
-    assert_eq!(
-        resource_statuses,
-        vec![
-            (stack_name.as_str(), "CREATE_IN_PROGRESS"),
-            ("Vpc", "CREATE_FAILED"),
-            (stack_name.as_str(), "ROLLBACK_IN_PROGRESS"),
-            ("Vpc", "DELETE_COMPLETE"),
-            (stack_name.as_str(), "ROLLBACK_COMPLETE")
-        ]
-    );
-
-    // Clean-up
-    client
-        .delete_stack(DeleteStackInput {
-            stack_name,
-            ..DeleteStackInput::default()
-        })
-        .await?;
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn update_stack_stream() -> Result<(), Box<dyn Error>> {
-    let client = get_client();
-
-    // Create a stack to update.
-    let create_stack_input = CreateStackInput {
-        stack_name: generated_name(),
-        template_body: Some(DUMMY_TEMPLATE.to_string()),
-        ..CreateStackInput::default()
-    };
-    let stack_name = client
-        .create_stack_stream(create_stack_input)
-        .await?
-        .collect::<Result<Vec<_>, _>>()
-        .await?
-        .pop()
-        .unwrap()
-        .stack_name;
-
-    // Successful update
-    let update_stack_input = UpdateStackInput {
-        stack_name: stack_name.clone(),
-        tags: Some(vec![Tag {
-            key: "foo".to_string(),
-            value: "bar".to_string(),
-        }]),
-        use_previous_template: Some(true),
-        ..UpdateStackInput::default()
-    };
-    let stack_events: Vec<StackEvent> = client
-        .update_stack_stream(update_stack_input)
-        .await?
-        .collect::<Result<_, _>>()
-        .await?;
-    let resource_statuses: Vec<_> = stack_events
-        .iter()
-        .map(|stack_event| stack_event.resource_status.as_deref().unwrap())
-        .collect();
-    assert_eq!(
-        resource_statuses,
-        vec![
-            "UPDATE_IN_PROGRESS",
-            "UPDATE_COMPLETE_CLEANUP_IN_PROGRESS",
-            "UPDATE_COMPLETE"
-        ]
-    );
-
-    // Failed update
-    let update_stack_input = UpdateStackInput {
-        stack_name: stack_name.clone(),
-        template_body: Some(FAILING_TEMPLATE.to_string()),
-        ..UpdateStackInput::default()
-    };
-    let stack_events: Vec<_> = client
-        .update_stack_stream(update_stack_input)
-        .await?
-        .collect::<Result<_, _>>()
-        .await?;
-    let resource_statuses: Vec<_> = stack_events
-        .iter()
-        .map(|stack_event| {
-            (
-                stack_event.logical_resource_id.as_deref().unwrap(),
-                stack_event.resource_status.as_deref().unwrap(),
-            )
-        })
-        .collect();
-    assert_eq!(
-        resource_statuses,
-        vec![
-            (stack_name.as_str(), "UPDATE_IN_PROGRESS"),
-            ("Vpc", "CREATE_FAILED"),
-            (stack_name.as_str(), "UPDATE_ROLLBACK_IN_PROGRESS"),
-            (
-                stack_name.as_str(),
-                "UPDATE_ROLLBACK_COMPLETE_CLEANUP_IN_PROGRESS"
-            ),
-            ("Vpc", "DELETE_COMPLETE"),
-            (stack_name.as_str(), "UPDATE_ROLLBACK_COMPLETE")
-        ]
-    );
-
-    // Clean-up
-    client
-        .delete_stack(DeleteStackInput {
-            stack_name,
-            ..DeleteStackInput::default()
-        })
-        .await?;
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn delete_stack_stream() -> Result<(), Box<dyn Error>> {
-    let client = get_client();
-
-    // Create a stack to delete
-    let stack_name = generated_name();
-    let create_stack_input = CreateStackInput {
-        stack_name: stack_name.clone(),
-        template_body: Some(DUMMY_TEMPLATE.to_string()),
-        ..CreateStackInput::default()
-    };
-    let stack_event = client
-        .create_stack_stream(create_stack_input)
-        .await?
-        .collect::<Result<Vec<_>, _>>()
-        .await?
-        .pop()
-        .unwrap();
-
-    // Successful delete
-    let delete_stack_input = DeleteStackInput {
-        stack_name: stack_event.stack_id,
-        ..DeleteStackInput::default()
-    };
-    let stack_events: Vec<StackEvent> = client
-        .delete_stack_stream(delete_stack_input.clone())
-        .await?
-        .collect::<Result<_, _>>()
-        .await?;
-    let resource_statuses: Vec<_> = stack_events
-        .iter()
-        .map(|stack_event| {
-            (
-                stack_event.logical_resource_id.as_deref().unwrap(),
-                stack_event.resource_status.as_deref().unwrap(),
-            )
-        })
-        .collect();
-    assert_eq!(
-        resource_statuses,
-        vec![
-            (stack_name.as_str(), "DELETE_IN_PROGRESS"),
-            (stack_name.as_str(), "DELETE_COMPLETE")
-        ]
-    );
-
-    // Delete idempotent with id
-    let stack_events: Vec<StackEvent> = client
-        .delete_stack_stream(delete_stack_input)
-        .await?
-        .collect::<Result<_, _>>()
-        .await?;
-    assert!(stack_events.is_empty());
-
-    // Delete idempotent with name
-    let delete_stack_input = DeleteStackInput {
-        stack_name: stack_event.stack_name,
-        ..DeleteStackInput::default()
-    };
-    let stack_events: Vec<_> = client
-        .delete_stack_stream(delete_stack_input)
-        .await?
-        .collect::<Result<_, _>>()
-        .await?;
-    assert!(stack_events.is_empty());
-
-    Ok(())
-}
-
-#[tokio::test]
 async fn create_change_set_wait() -> Result<(), Box<dyn Error>> {
     let client = get_client();
 
@@ -288,30 +51,19 @@ async fn create_change_set_wait() -> Result<(), Box<dyn Error>> {
     assert_eq!(change_set.execution_status.as_deref(), Some("AVAILABLE"));
     assert_eq!(change_set.status.as_deref(), Some("CREATE_COMPLETE"));
 
-    // Clean-up
-    client
-        .delete_stack(DeleteStackInput {
-            stack_name: change_set.stack_id.unwrap(),
-            ..DeleteStackInput::default()
-        })
-        .await?;
-
     // Failed create
-    let create_stack_input = CreateStackInput {
-        stack_name: generated_name(),
-        template_body: Some(DUMMY_TEMPLATE.to_string()),
-        ..CreateStackInput::default()
+    let execute_change_set_input = ExecuteChangeSetInput {
+        change_set_name: change_set.change_set_id.unwrap(),
+        ..ExecuteChangeSetInput::default()
     };
-    let stack_event = client
-        .create_stack_stream(create_stack_input)
+    client
+        .execute_change_set_stream(execute_change_set_input)
         .await?
         .collect::<Result<Vec<_>, _>>()
-        .await?
-        .pop()
-        .unwrap();
+        .await?;
 
     let create_change_set_input = CreateChangeSetInput {
-        stack_name: stack_event.stack_id,
+        stack_name: change_set.stack_id.unwrap(),
         change_set_name: generated_name(),
         change_set_type: Some("UPDATE".to_string()),
         template_body: Some(DUMMY_TEMPLATE.to_string()),
@@ -326,7 +78,7 @@ async fn create_change_set_wait() -> Result<(), Box<dyn Error>> {
     // Clean-up
     client
         .delete_stack(DeleteStackInput {
-            stack_name: stack_event.stack_name,
+            stack_name: change_set.stack_name.unwrap(),
             ..DeleteStackInput::default()
         })
         .await?;
