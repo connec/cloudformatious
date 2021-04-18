@@ -1,6 +1,7 @@
 #![warn(clippy::pedantic)]
 
 mod apply;
+mod change_set;
 mod event;
 mod status;
 
