@@ -58,6 +58,9 @@ type PinBoxFut<'a, T> = Pin<Box<dyn Future<Output = T> + 'a>>;
 pub type StackEventStream<'a> =
     Pin<Box<dyn Stream<Item = Result<StackEvent, RusotoError<DescribeStackEventsError>>> + 'a>>;
 
+type CreateChangeSetWaitOutput<'a> =
+    PinBoxFut<'a, Result<DescribeChangeSetOutput, RusotoError<DescribeChangeSetError>>>;
+
 /// [`rusoto_cloudformation::CloudFormation`] extension trait that works directly with
 /// `rusoto_cloudformation` types.
 pub trait CloudFormationExt {
@@ -66,6 +69,10 @@ pub trait CloudFormationExt {
     /// This will call the `CreateChangeSet` API, but that only begins the creation process. If
     /// `CreateChangeSet` returns successfully, the `DescribeChangeSet` API is polled until the
     /// change set has settled.
+    ///
+    /// Furthermore, if the given `input` has `CREATE` as the change set type and the API returns an
+    /// error because the stack already exists, the change set type is changed to `UPDATE` and the
+    /// operation is retried.
     ///
     /// # Errors
     ///
@@ -81,30 +88,30 @@ pub trait CloudFormationExt {
     fn create_change_set_wait(
         &self,
         input: CreateChangeSetInput,
-    ) -> PinBoxFut<'_, Result<DescribeChangeSetOutput, CreateChangeSetWaitError>>;
+    ) -> PinBoxFut<'_, Result<CreateChangeSetWaitOutput, RusotoError<CreateChangeSetError>>>;
 
     /// Execute a change set and return a stream of relevant stack events.
     ///
-    /// This will call the `DescribeChangeSet` API to get the stack ID, followed by the
-    /// `ExecuteChangeSet` API to commence the execution. If that returns successfully the
-    /// `DescribeStackEvents` API is polled and the events are emitted through the returned
-    /// `Stream`. The stream ends when the stack reaches a settled state.
+    /// This will call the `ExecuteChangeSet` API to commence the execution. If that returns
+    /// successfully the `DescribeStackEvents` API is polled and the events are emitted through the
+    /// returned `Stream`. The stream ends when the stack reaches a settled state.
     ///
     /// # Errors
     ///
-    /// The returned `Future` will resolve to an `Err` if the `DescribeChangeSet` or
-    /// `ExecuteChangeSet` API fails. Since any attempt to poll the `DescribeStackEvents` API might
-    /// fail, each event is wrapped in a `Result` and so must be checked for errors.
+    /// The returned `Future` will resolve to an `Err` if the `ExecuteChangeSet` API fails. Since
+    /// any attempt to poll the `DescribeStackEvents` API might fail, each event is wrapped in a
+    /// `Result` and so must be checked for errors.
     ///
     /// # Panics
     ///
-    /// This will panic if the stack enters a status that is unexpected for updating. This would be
-    /// a bug in CloudFormation itself or (more likely) a misunderstanding of its semantics that
-    /// would require this library to be updated!
+    /// This will panic if the stack enters a status that is unexpected for the operation. This
+    /// would be a bug in CloudFormation itself or (more likely) a misunderstanding of its semantics
+    /// that would require this library to be updated!
     fn execute_change_set_stream(
         &self,
+        stack_id: String,
         input: ExecuteChangeSetInput,
-    ) -> PinBoxFut<Result<StackEventStream, ExecuteChangeSetStreamError>>;
+    ) -> PinBoxFut<Result<StackEventStream, RusotoError<ExecuteChangeSetError>>>;
 }
 
 impl<T> CloudFormationExt for T
@@ -114,36 +121,26 @@ where
     fn create_change_set_wait(
         &self,
         input: CreateChangeSetInput,
-    ) -> PinBoxFut<'_, Result<DescribeChangeSetOutput, CreateChangeSetWaitError>> {
+    ) -> PinBoxFut<'_, Result<CreateChangeSetWaitOutput, RusotoError<CreateChangeSetError>>> {
         Box::pin(create_change_set_wait(self, input))
     }
 
     fn execute_change_set_stream(
         &self,
+        stack_id: String,
         input: ExecuteChangeSetInput,
-    ) -> PinBoxFut<Result<StackEventStream, ExecuteChangeSetStreamError>> {
-        Box::pin(execute_change_set_stream(self, input))
+    ) -> PinBoxFut<Result<StackEventStream, RusotoError<ExecuteChangeSetError>>> {
+        Box::pin(execute_change_set_stream(self, stack_id, input))
     }
-}
-
-/// Errors that can occur during [`create_change_set_wait`].
-///
-/// [`create_change_set_wait`]: CloudFormationExt::create_change_set_wait
-#[derive(Debug, thiserror::Error)]
-pub enum CreateChangeSetWaitError {
-    /// The `CreateChangeSet` operation returned an error.
-    #[error("CreateChangeSet error: {0}")]
-    CreateChangeSet(#[from] RusotoError<CreateChangeSetError>),
-
-    /// A `DescribeChangeSet` operation returned an error.
-    #[error("DescribeChangeSet error: {0}")]
-    DescribeChangeSet(#[from] RusotoError<DescribeChangeSetError>),
 }
 
 async fn create_change_set_wait<Client: CloudFormation>(
     client: &Client,
     input: CreateChangeSetInput,
-) -> Result<DescribeChangeSetOutput, CreateChangeSetWaitError> {
+) -> Result<
+    PinBoxFut<'_, Result<DescribeChangeSetOutput, RusotoError<DescribeChangeSetError>>>,
+    RusotoError<CreateChangeSetError>,
+> {
     let change_set_id = client
         .create_change_set(input)
         .await?
@@ -158,57 +155,36 @@ async fn create_change_set_wait<Client: CloudFormation>(
         Instant::now() + Duration::from_secs(1),
         Duration::from_secs(1),
     );
-    loop {
-        interval.tick().await;
+    Ok(Box::pin(async move {
+        loop {
+            interval.tick().await;
 
-        let change_set = client
-            .describe_change_set(describe_change_set_input.clone())
-            .await?;
-        let change_set_status = change_set
-            .status
-            .as_deref()
-            .expect("DescribeChangeSet without status");
-        if CREATE_CHANGE_SET_PROGRESS_STATUSES.contains(&change_set_status) {
-            continue;
+            let change_set = client
+                .describe_change_set(describe_change_set_input.clone())
+                .await?;
+            let change_set_status = change_set
+                .status
+                .as_deref()
+                .expect("DescribeChangeSet without status");
+            if CREATE_CHANGE_SET_PROGRESS_STATUSES.contains(&change_set_status) {
+                continue;
+            }
+            if CREATE_CHANGE_SET_TERMINAL_STATUSES.contains(&change_set_status) {
+                return Ok(change_set);
+            }
+            panic!(
+                "change set {} has inconsistent status for create: {}",
+                change_set_id, change_set_status
+            );
         }
-        if CREATE_CHANGE_SET_TERMINAL_STATUSES.contains(&change_set_status) {
-            return Ok(change_set);
-        }
-        panic!(
-            "change set {} has inconsistent status for create: {}",
-            change_set_id, change_set_status
-        );
-    }
-}
-
-/// Errors that can be returned by [`execute_change_set_stream`].
-///
-/// [`execute_change_set_stream`]: CloudFormationExt::execute_change_set_stream
-#[derive(Debug, thiserror::Error)]
-pub enum ExecuteChangeSetStreamError {
-    /// The `DescribeChangeSet` operation returned an error.
-    #[error("{0}")]
-    DescribeChangeSet(#[from] RusotoError<DescribeChangeSetError>),
-
-    /// The `ExecuteChangeSet` operation returned an error.
-    #[error("{0}")]
-    ExecuteChangeSet(#[from] RusotoError<ExecuteChangeSetError>),
+    }))
 }
 
 async fn execute_change_set_stream<Client: CloudFormation>(
     client: &Client,
+    stack_id: String,
     input: ExecuteChangeSetInput,
-) -> Result<StackEventStream<'_>, ExecuteChangeSetStreamError> {
-    let stack_id = client
-        .describe_change_set(DescribeChangeSetInput {
-            stack_name: input.stack_name.clone(),
-            change_set_name: input.change_set_name.clone(),
-            ..DescribeChangeSetInput::default()
-        })
-        .await?
-        .stack_id
-        .expect("DescribeChangeSetOutput without stack_id");
-
+) -> Result<StackEventStream<'_>, RusotoError<ExecuteChangeSetError>> {
     let mut event_cutoff = format_timestamp(Utc::now());
     client.execute_change_set(input).await?;
 

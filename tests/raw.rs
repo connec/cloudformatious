@@ -8,7 +8,7 @@ use rusoto_core::HttpClient;
 use rusoto_credential::{AutoRefreshingProvider, ChainProvider};
 use tokio_stream::StreamExt;
 
-use rusoto_cloudformation_ext::raw::{CloudFormationExt, CreateChangeSetWaitError};
+use rusoto_cloudformation_ext::raw::CloudFormationExt;
 
 const NAME_PREFIX: &str = "rusoto-cloudformation-ext-testing-";
 const DUMMY_TEMPLATE: &str = r#"{
@@ -47,6 +47,7 @@ async fn create_change_set_wait() -> Result<(), Box<dyn Error>> {
     };
     let change_set = client
         .create_change_set_wait(create_change_set_input)
+        .await?
         .await?;
     assert_eq!(change_set.execution_status.as_deref(), Some("AVAILABLE"));
     assert_eq!(change_set.status.as_deref(), Some("CREATE_COMPLETE"));
@@ -57,7 +58,10 @@ async fn create_change_set_wait() -> Result<(), Box<dyn Error>> {
         ..ExecuteChangeSetInput::default()
     };
     client
-        .execute_change_set_stream(execute_change_set_input)
+        .execute_change_set_stream(
+            change_set.stack_id.clone().unwrap(),
+            execute_change_set_input,
+        )
         .await?
         .collect::<Result<Vec<_>, _>>()
         .await?;
@@ -71,6 +75,7 @@ async fn create_change_set_wait() -> Result<(), Box<dyn Error>> {
     };
     let change_set = client
         .create_change_set_wait(create_change_set_input)
+        .await?
         .await?;
     assert_eq!(change_set.execution_status.as_deref(), Some("UNAVAILABLE"));
     assert_eq!(change_set.status.as_deref(), Some("FAILED"));
@@ -86,10 +91,7 @@ async fn create_change_set_wait() -> Result<(), Box<dyn Error>> {
     // CreateChangeSet error
     let create_change_set_input = CreateChangeSetInput::default();
     let change_set_result = client.create_change_set_wait(create_change_set_input).await;
-    assert!(matches!(
-        change_set_result,
-        Err(CreateChangeSetWaitError::CreateChangeSet(_))
-    ));
+    assert!(matches!(change_set_result, Err(_)));
 
     Ok(())
 }
@@ -109,6 +111,7 @@ async fn execute_change_set_stream() -> Result<(), Box<dyn Error>> {
     };
     let change_set = client
         .create_change_set_wait(create_change_set_input)
+        .await?
         .await?;
 
     // Successful execution
@@ -117,7 +120,7 @@ async fn execute_change_set_stream() -> Result<(), Box<dyn Error>> {
         ..ExecuteChangeSetInput::default()
     };
     let stack_events: Vec<_> = client
-        .execute_change_set_stream(execute_change_set_input)
+        .execute_change_set_stream(change_set.stack_id.unwrap(), execute_change_set_input)
         .await?
         .collect::<Result<_, _>>()
         .await?;
@@ -148,7 +151,9 @@ async fn execute_change_set_stream() -> Result<(), Box<dyn Error>> {
     };
     let change_set = client
         .create_change_set_wait(create_change_set_input)
+        .await?
         .await?;
+    assert_eq!(change_set.status.as_deref(), Some("CREATE_COMPLETE"));
 
     // Failed execution
     let execute_change_set_input = ExecuteChangeSetInput {
@@ -156,7 +161,7 @@ async fn execute_change_set_stream() -> Result<(), Box<dyn Error>> {
         ..ExecuteChangeSetInput::default()
     };
     let stack_events: Vec<_> = client
-        .execute_change_set_stream(execute_change_set_input)
+        .execute_change_set_stream(change_set.stack_id.unwrap(), execute_change_set_input)
         .await?
         .collect::<Result<_, _>>()
         .await?;
@@ -187,7 +192,7 @@ async fn execute_change_set_stream() -> Result<(), Box<dyn Error>> {
     // Clean-up
     client
         .delete_stack(DeleteStackInput {
-            stack_name: change_set.stack_id.unwrap(),
+            stack_name,
             ..DeleteStackInput::default()
         })
         .await?;
