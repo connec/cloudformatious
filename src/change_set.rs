@@ -10,7 +10,7 @@ use memmem::{Searcher, TwoWaySearcher};
 use rusoto_cloudformation::{
     CloudFormation, CreateChangeSetInput, DescribeChangeSetError, DescribeChangeSetInput,
     DescribeChangeSetOutput, DescribeStackEventsError, DescribeStackEventsInput,
-    ExecuteChangeSetError, ExecuteChangeSetInput,
+    ExecuteChangeSetInput,
 };
 use rusoto_core::{request::BufferedHttpResponse, RusotoError};
 use tokio::time::{interval_at, Instant};
@@ -95,13 +95,6 @@ impl From<RusotoError<DescribeChangeSetError>> for CreateChangeSetError {
     }
 }
 
-/// Private enum to simplify stack event handling in [`execute_change_set`].
-enum ExecuteStatus {
-    InProgress,
-    Terminated,
-    Unexpected,
-}
-
 pub(crate) async fn create_change_set<Client: CloudFormation>(
     client: &Client,
     mut input: CreateChangeSetInput,
@@ -162,28 +155,55 @@ pub(crate) async fn create_change_set<Client: CloudFormation>(
     }
 }
 
-pub(crate) async fn execute_change_set<Client: CloudFormation>(
+pub(crate) enum ExecuteChangeSetError {
+    ExecuteApi(RusotoError<rusoto_cloudformation::ExecuteChangeSetError>),
+    PollApi(RusotoError<DescribeStackEventsError>),
+    Failed {
+        // Separate status from event to avoid having to match
+        status: StackStatus,
+        event: StackEvent,
+    },
+}
+
+impl From<RusotoError<rusoto_cloudformation::ExecuteChangeSetError>> for ExecuteChangeSetError {
+    fn from(error: RusotoError<rusoto_cloudformation::ExecuteChangeSetError>) -> Self {
+        Self::ExecuteApi(error)
+    }
+}
+
+impl From<RusotoError<DescribeStackEventsError>> for ExecuteChangeSetError {
+    fn from(error: RusotoError<DescribeStackEventsError>) -> Self {
+        Self::PollApi(error)
+    }
+}
+
+/// Private enum to simplify stack event handling in [`execute_change_set`].
+enum ExecuteStatus {
+    InProgress,
+    Complete,
+    Failed,
+    Unexpected,
+}
+
+pub(crate) fn execute_change_set<Client: CloudFormation>(
     client: &Client,
     change_set: ChangeSet,
-) -> Result<
-    impl Stream<Item = Result<StackEvent, RusotoError<DescribeStackEventsError>>> + '_,
-    RusotoError<ExecuteChangeSetError>,
-> {
-    let mut since = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
-    let input = ExecuteChangeSetInput {
-        change_set_name: change_set.id,
-        ..ExecuteChangeSetInput::default()
-    };
-    client.execute_change_set(input).await?;
+) -> impl Stream<Item = Result<StackEvent, ExecuteChangeSetError>> + '_ {
+    try_stream! {
+        let mut since = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+        let input = ExecuteChangeSetInput {
+            change_set_name: change_set.id,
+            ..ExecuteChangeSetInput::default()
+        };
+        client.execute_change_set(input).await?;
 
-    let mut interval = tokio::time::interval(POLL_INTERVAL_STACK_EVENT);
-    let describe_stack_events_input = DescribeStackEventsInput {
-        stack_name: Some(change_set.stack_id),
-        ..DescribeStackEventsInput::default()
-    };
+        let mut interval = tokio::time::interval(POLL_INTERVAL_STACK_EVENT);
+        let describe_stack_events_input = DescribeStackEventsInput {
+            stack_name: Some(change_set.stack_id),
+            ..DescribeStackEventsInput::default()
+        };
 
-    let change_set_type = change_set.r#type;
-    Ok(try_stream! {
+        let change_set_type = change_set.r#type;
         loop {
             interval.tick().await;
 
@@ -210,9 +230,16 @@ pub(crate) async fn execute_change_set<Client: CloudFormation>(
                         resource_status, ..
                     } => match get_execute_status(change_set_type, *resource_status) {
                         ExecuteStatus::InProgress => yield stack_event,
-                        ExecuteStatus::Terminated => {
+                        ExecuteStatus::Complete => {
                             yield stack_event;
                             return;
+                        }
+                        ExecuteStatus::Failed => {
+                            Err(ExecuteChangeSetError::Failed {
+                                status: *resource_status,
+                                event: stack_event,
+                            })?;
+                            unreachable!()
                         }
                         ExecuteStatus::Unexpected => {
                             panic!(
@@ -229,7 +256,7 @@ pub(crate) async fn execute_change_set<Client: CloudFormation>(
                 }
             }
         }
-    })
+    }
 }
 
 fn is_already_exists(response: &BufferedHttpResponse) -> bool {
@@ -250,10 +277,10 @@ fn get_execute_status(change_set_type: ChangeSetType, stack_status: StackStatus)
             StackStatus::CreateInProgress | StackStatus::RollbackInProgress => {
                 ExecuteStatus::InProgress
             }
-            StackStatus::CreateComplete
-            | StackStatus::CreateFailed
+            StackStatus::CreateComplete => ExecuteStatus::Complete,
+            StackStatus::CreateFailed
             | StackStatus::RollbackFailed
-            | StackStatus::RollbackComplete => ExecuteStatus::Terminated,
+            | StackStatus::RollbackComplete => ExecuteStatus::Failed,
             _ => ExecuteStatus::Unexpected,
         },
         ChangeSetType::Update => match stack_status {
@@ -261,9 +288,10 @@ fn get_execute_status(change_set_type: ChangeSetType, stack_status: StackStatus)
             | StackStatus::UpdateCompleteCleanupInProgress
             | StackStatus::UpdateRollbackInProgress
             | StackStatus::UpdateRollbackCompleteCleanupInProgress => ExecuteStatus::InProgress,
-            StackStatus::UpdateComplete
-            | StackStatus::UpdateRollbackFailed
-            | StackStatus::UpdateRollbackComplete => ExecuteStatus::Terminated,
+            StackStatus::UpdateComplete => ExecuteStatus::Complete,
+            StackStatus::UpdateRollbackFailed | StackStatus::UpdateRollbackComplete => {
+                ExecuteStatus::Failed
+            }
             _ => ExecuteStatus::Unexpected,
         },
     }
