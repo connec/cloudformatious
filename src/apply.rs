@@ -4,7 +4,7 @@ use std::{fmt, future::Future, pin::Pin, task};
 
 use async_stream::try_stream;
 use chrono::{DateTime, Utc};
-use futures_util::{pin_mut, Stream, StreamExt, TryFutureExt, TryStreamExt};
+use futures_util::{Stream, TryFutureExt, TryStreamExt};
 use rusoto_cloudformation::{
     CloudFormation, CreateChangeSetInput, DescribeStacksInput, Stack, Tag,
 };
@@ -576,62 +576,13 @@ impl<'client> Apply<'client> {
             };
             let stack_id = change_set.stack_id.clone();
 
-            let event_stream = execute_change_set_internal(client, change_set);
-            pin_mut!(event_stream);
-
-            let mut stack_error_status = None;
-            let mut stack_error_status_reason = None;
-            let mut resource_error_events = Vec::new();
-            while let Some(event) = event_stream.try_next().await? {
-                let event = event.unwrap_or_else(|(status, event)| {
-                    stack_error_status = Some(status);
-                    event
-                });
-                match event {
-                    StackEvent::Stack {
-                        resource_status,
-                        details:
-                            StackEventDetails {
-                                resource_status_reason: Some(ref reason),
-                                ..
-                            },
-                    } if resource_status.sentiment().is_negative()
-                        && stack_error_status_reason.is_none() =>
-                    {
-                        stack_error_status_reason.replace(reason.to_string());
-                    }
-                    StackEvent::Resource {
-                        resource_status,
-                        ref details,
-                    } if resource_status.sentiment().is_negative() => {
-                        resource_error_events.push((resource_status, details.clone()));
-                    }
-                    _ => {}
-                }
+            let mut execution = ExecuteChangeSet::new(client, stack_id, change_set);
+            while let Some(event) = execution.try_next().await? {
                 yield ApplyEvent::Event(event);
             }
 
-            if let Some(stack_status) = stack_error_status {
-                Err(ApplyError::Failure {
-                    stack_id,
-                    stack_status,
-                    stack_status_reason: stack_error_status_reason
-                        .expect("stack op failed with no reasons"),
-                    resource_events: resource_error_events,
-                })?;
-                unreachable!()
-            }
-
-            let output = describe_output(client, stack_id).await?;
-            if resource_error_events.is_empty() {
-                yield ApplyEvent::Output(output);
-            } else {
-                Err(ApplyError::Warning {
-                    output,
-                    resource_events: resource_error_events,
-                })?;
-                unreachable!()
-            }
+            let output = execution.try_into_output().await?;
+            yield ApplyEvent::Output(output);
         };
         Self {
             event_stream: Box::pin(event_stream),
@@ -662,23 +613,110 @@ async fn create_change_set_internal<Client: CloudFormation>(
     }
 }
 
-fn execute_change_set_internal<Client: CloudFormation>(
-    client: &Client,
-    change_set: ChangeSet,
-) -> impl Stream<Item = Result<Result<StackEvent, (StackStatus, StackEvent)>, ApplyError>> + '_ {
-    try_stream! {
-        let event_stream = execute_change_set(client, change_set);
-        pin_mut!(event_stream);
+/// A stream that tracks useful error info.
+struct ExecuteChangeSet<'client, Client> {
+    client: &'client Client,
+    stack_id: String,
+    events: Pin<Box<dyn Stream<Item = Result<StackEvent, ExecuteChangeSetError>> + 'client>>,
+    stack_error_status: Option<StackStatus>,
+    stack_error_status_reason: Option<String>,
+    resource_error_events: Vec<(ResourceStatus, StackEventDetails)>,
+}
 
-        while let Some(event) = event_stream.next().await {
-            let event = event.map(Ok).or_else(|error| match error {
-                ExecuteChangeSetError::ExecuteApi(error) => {
-                    Err(ApplyError::from_rusoto_error(error))
+impl<'client, Client> ExecuteChangeSet<'client, Client>
+where
+    Client: CloudFormation,
+{
+    fn new(client: &'client Client, stack_id: String, change_set: ChangeSet) -> Self {
+        ExecuteChangeSet {
+            client,
+            stack_id,
+            events: Box::pin(execute_change_set(client, change_set)),
+            stack_error_status: None,
+            stack_error_status_reason: None,
+            resource_error_events: Vec::new(),
+        }
+    }
+
+    fn process_event(
+        &mut self,
+        event: Result<StackEvent, ExecuteChangeSetError>,
+    ) -> Result<StackEvent, ApplyError> {
+        let event = event.or_else(|error| match error {
+            ExecuteChangeSetError::ExecuteApi(error) => Err(ApplyError::from_rusoto_error(error)),
+            ExecuteChangeSetError::PollApi(error) => Err(ApplyError::from_rusoto_error(error)),
+            ExecuteChangeSetError::Failed { status, event } => {
+                self.stack_error_status = Some(status);
+                Ok(event)
+            }
+        })?;
+
+        match &event {
+            StackEvent::Stack {
+                resource_status, ..
+            } => {
+                if resource_status.sentiment().is_negative() {
+                    if let Some(reason) = event.resource_status_reason() {
+                        self.stack_error_status_reason.replace(reason.to_string());
+                    }
                 }
-                ExecuteChangeSetError::PollApi(error) => Err(ApplyError::from_rusoto_error(error)),
-                ExecuteChangeSetError::Failed { status, event } => Ok(Err((status, event))),
-            })?;
-            yield event;
+            }
+            StackEvent::Resource {
+                resource_status,
+                details,
+            } => {
+                if resource_status.sentiment().is_negative() {
+                    self.resource_error_events
+                        .push((*resource_status, details.clone()));
+                }
+            }
+        }
+
+        Ok(event)
+    }
+
+    async fn try_into_output(self) -> Result<ApplyOutput, ApplyError> {
+        if let Some(stack_status) = self.stack_error_status {
+            return Err(ApplyError::Failure {
+                stack_id: self.stack_id,
+                stack_status,
+                stack_status_reason: self
+                    .stack_error_status_reason
+                    .expect("stack op failed with no reasons"),
+                resource_events: self.resource_error_events,
+            });
+        }
+
+        let output = describe_output(self.client, self.stack_id).await?;
+
+        if self.resource_error_events.is_empty() {
+            Ok(output)
+        } else {
+            Err(ApplyError::Warning {
+                output,
+                resource_events: self.resource_error_events,
+            })
+        }
+    }
+}
+
+impl<'client, Client> Stream for ExecuteChangeSet<'client, Client>
+where
+    Client: CloudFormation,
+{
+    type Item = Result<StackEvent, ApplyError>;
+
+    fn poll_next(
+        mut self: Pin<&mut Self>,
+        ctx: &mut task::Context<'_>,
+    ) -> task::Poll<Option<Self::Item>> {
+        match self.events.as_mut().poll_next(ctx) {
+            task::Poll::Pending => task::Poll::Pending,
+            task::Poll::Ready(None) => task::Poll::Ready(None),
+            task::Poll::Ready(Some(event)) => {
+                let event = self.process_event(event);
+                task::Poll::Ready(Some(event))
+            }
         }
     }
 }
