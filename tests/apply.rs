@@ -152,6 +152,32 @@ async fn create_stack_err() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[tokio::test]
+async fn create_change_set_err() -> Result<(), Box<dyn std::error::Error>> {
+    let client = get_client();
+
+    let stack_name = generated_name();
+    let input = ApplyInput {
+        capabilities: Vec::new(),
+        client_request_token: None,
+        notification_arns: Vec::new(),
+        parameters: Vec::new(),
+        resource_types: None,
+        role_arn: None,
+        stack_name: stack_name.clone(),
+        tags: Vec::new(),
+        template_body: Some("".to_string()),
+        template_url: None,
+    };
+    let error = client.apply(input).await.unwrap_err();
+    if let ApplyError::CloudFormationApi { .. } = error {
+    } else {
+        return Err(error.into());
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn update_stack_err() -> Result<(), Box<dyn std::error::Error>> {
     let client = get_client();
 
