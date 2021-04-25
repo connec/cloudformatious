@@ -22,6 +22,9 @@ pub trait CloudFormatious: CloudFormation + Sized + private::Sealed {
     /// This is an idempotent operation that will create the indicated stack if it doesn't exist, or
     /// update it if it does. It is not an error for there to be no changes.
     ///
+    /// This is similar to the `aws cloudformation deploy` command from the AWS CLI (with
+    /// `--no-fail-on-empty-changeset` always on).
+    ///
     /// The return value implements both `Future` and `Stream`. The `Future` implementation can be
     /// used to simply wait for the operation to complete, or the `Stream` implementation can be
     /// used to react to stack events that occur during the operation. See the [`Apply`] struct for
@@ -40,4 +43,16 @@ mod private {
     pub trait Sealed {}
 
     impl Sealed for CloudFormationClient {}
+}
+
+#[cfg(doctest)]
+mod test_readme {
+    macro_rules! external_doc_test {
+        ($x:expr) => {
+            #[doc = $x]
+            extern "C" {}
+        };
+    }
+
+    external_doc_test!(include_str!("../README.md"));
 }

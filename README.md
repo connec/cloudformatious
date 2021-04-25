@@ -2,7 +2,49 @@
 
 ⚠️ This crate is WIP.
 
-Extension traits for [`rusoto_cloudformation::CloudFormationClient`](https://docs.rs/rusoto_cloudformation/0.46.0/rusoto_cloudformation/struct.CloudFormationClient.html) offering higher-level APIs to perform long-running operations and await their termination or observe their progress.
+An extension trait for [`rusoto_cloudformation::CloudFormationClient`](https://docs.rs/rusoto_cloudformation/0.46.0/rusoto_cloudformation/struct.CloudFormationClient.html) offering richly typed higher-level APIs to perform long-running operations and await their termination or observe their progress.
+
+```rust + no_run
+use futures_util::TryStreamExt;
+use rusoto_cloudformation::CloudFormationClient;
+use rusoto_core::Region;
+
+use cloudformatious::{ApplyEvent, ApplyInput, CloudFormatious};
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let client = CloudFormationClient::new(Region::EuWest2);
+
+    // A builder for `ApplyInput` is high on the priority list...
+    let input = ApplyInput {
+        capabilities: Default::default(),
+        client_request_token: Default::default(),
+        notification_arns: Default::default(),
+        parameters: Default::default(),
+        resource_types: Default::default(),
+        role_arn: Default::default(),
+        stack_name: "my-stack".to_string(),
+        tags: Default::default(),
+        template_body: Some("{}".to_string()),
+        template_url: Default::default()
+    };
+
+    let mut apply = client.apply(input);
+    let mut output = None; // A cleaner way of getting the output is also on the list...
+
+    while let Some(event) = apply.try_next().await? {
+        match event {
+            ApplyEvent::Event(event) => eprintln!("{:#?}", event),
+            ApplyEvent::Output(output_) => output = Some(output_),
+        }
+    };
+
+    eprintln!("Apply success!");
+    println!("{:#?}", output.unwrap());
+
+    Ok(())
+}
+```
 
 ## Motivation
 
@@ -13,14 +55,9 @@ Furthermore, the tools that I'm aware of are primarily invoked from the shell, m
 
 Also, I like CloudFormation and programming in Rust so this is fun for me 🤷‍♂️
 
-## Goal
+## Current status
 
-The initial goal of this library is to support an idempotent deployment workflow whereby a CloudFormation template is 'applied' to an AWS environment (account and region):
+There is a `CloudFormatious` extension trait with an `apply` method, which implements an idempotent 'update or create stack' operation.
+It's roughly equivalent to the [`aws cloudformation deploy`](https://docs.aws.amazon.com/cli/latest/reference/cloudformation/deploy/index.html) command, but with better programmatic access to inputs, events, and outputs.
 
-- If there is no stack in the AWS environment, one should be created; if one exists it should be updated.
-- If there are no changes, the operation should succeed.
-- The progress of the operation should be observeable.
-- The stack outputs should be returned in a successful result.
-- The operation should fail if the stack operation fails.
-
-This can all be achieved by orchestrating CloudFormation APIs, but this library should offer a single API that offers this behaviour.
+I will probably want a similar '`Future` or `Stream`' API for stack deletion, but I have no needs beyond that for my current use cases.
