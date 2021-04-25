@@ -332,6 +332,7 @@ pub struct StackOutput {
 }
 
 /// Events emitted by an `apply` operation.
+#[derive(Debug, PartialEq)]
 #[allow(clippy::module_name_repetitions)]
 pub enum ApplyEvent {
     /// A stack event emitted by CloudFormation during the `apply` operation.
@@ -564,6 +565,17 @@ impl Future for Apply<'_> {
                 }
             }
         }
+    }
+}
+
+impl Stream for Apply<'_> {
+    type Item = Result<ApplyEvent, ApplyError>;
+
+    fn poll_next(
+        mut self: Pin<&mut Self>,
+        ctx: &mut task::Context,
+    ) -> task::Poll<Option<Self::Item>> {
+        self.event_stream.as_mut().poll_next(ctx)
     }
 }
 
