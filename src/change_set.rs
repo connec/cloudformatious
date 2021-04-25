@@ -1,6 +1,6 @@
 //! Helpers for working with change sets.
 
-use std::{fmt, future::Future, time::Duration};
+use std::{fmt, time::Duration};
 
 use async_stream::try_stream;
 use chrono::Utc;
@@ -8,9 +8,9 @@ use futures_util::Stream;
 use futures_util::TryFutureExt;
 use memmem::{Searcher, TwoWaySearcher};
 use rusoto_cloudformation::{
-    CloudFormation, CreateChangeSetError, CreateChangeSetInput, DescribeChangeSetError,
-    DescribeChangeSetInput, DescribeChangeSetOutput, DescribeStackEventsError,
-    DescribeStackEventsInput, ExecuteChangeSetError, ExecuteChangeSetInput,
+    CloudFormation, CreateChangeSetInput, DescribeChangeSetError, DescribeChangeSetInput,
+    DescribeChangeSetOutput, DescribeStackEventsError, DescribeStackEventsInput,
+    ExecuteChangeSetError, ExecuteChangeSetInput,
 };
 use rusoto_core::{request::BufferedHttpResponse, RusotoError};
 use tokio::time::{interval_at, Instant};
@@ -22,14 +22,6 @@ use crate::{
 
 const POLL_INTERVAL_CHANGE_SET: Duration = Duration::from_secs(1);
 const POLL_INTERVAL_STACK_EVENT: Duration = Duration::from_secs(5);
-
-type CreateChangeSetResult = Result<
-    // The nested `Result` is intended to make it hard to ignore the status of the resulting change
-    // set and going on to, e.g., try to execute a failed change set. The `Option` indicates the
-    // case where creation failed due to no changes being present.
-    Result<ChangeSet, ChangeSet>,
-    RusotoError<DescribeChangeSetError>,
->;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ChangeSetType {
@@ -84,6 +76,25 @@ impl ChangeSet {
     }
 }
 
+pub(crate) enum CreateChangeSetError {
+    CreateApi(RusotoError<rusoto_cloudformation::CreateChangeSetError>),
+    PollApi(RusotoError<DescribeChangeSetError>),
+    NoChanges(ChangeSet),
+    Failed(ChangeSet),
+}
+
+impl From<RusotoError<rusoto_cloudformation::CreateChangeSetError>> for CreateChangeSetError {
+    fn from(error: RusotoError<rusoto_cloudformation::CreateChangeSetError>) -> Self {
+        Self::CreateApi(error)
+    }
+}
+
+impl From<RusotoError<DescribeChangeSetError>> for CreateChangeSetError {
+    fn from(error: RusotoError<DescribeChangeSetError>) -> Self {
+        Self::PollApi(error)
+    }
+}
+
 /// Private enum to simplify stack event handling in [`execute_change_set`].
 enum ExecuteStatus {
     InProgress,
@@ -94,7 +105,7 @@ enum ExecuteStatus {
 pub(crate) async fn create_change_set<Client: CloudFormation>(
     client: &Client,
     mut input: CreateChangeSetInput,
-) -> Result<impl Future<Output = CreateChangeSetResult> + '_, RusotoError<CreateChangeSetError>> {
+) -> Result<ChangeSet, CreateChangeSetError> {
     let mut change_set_type = ChangeSetType::try_from(input.change_set_type.as_deref());
     let change_set = client.create_change_set(input.clone());
     let change_set = change_set
@@ -127,27 +138,28 @@ pub(crate) async fn create_change_set<Client: CloudFormation>(
         change_set_name: change_set_id,
         ..DescribeChangeSetInput::default()
     };
-    Ok(async move {
-        loop {
-            interval.tick().await;
+    loop {
+        interval.tick().await;
 
-            let change_set = client
-                .describe_change_set(describe_change_set_input.clone())
-                .await?;
-            let change_set = ChangeSet::from_raw(change_set_type, change_set);
-            match change_set.status {
-                ChangeSetStatus::CreatePending | ChangeSetStatus::CreateInProgress => continue,
-                ChangeSetStatus::CreateComplete => return Ok(Ok(change_set)),
-                ChangeSetStatus::Failed => return Ok(Err(change_set)),
-                _ => {
-                    panic!(
-                        "change set {} had unexpected status: {}",
-                        change_set.id, change_set.status
-                    );
-                }
+        let change_set = client
+            .describe_change_set(describe_change_set_input.clone())
+            .await?;
+        let change_set = ChangeSet::from_raw(change_set_type, change_set);
+        match change_set.status {
+            ChangeSetStatus::CreatePending | ChangeSetStatus::CreateInProgress => continue,
+            ChangeSetStatus::CreateComplete => return Ok(change_set),
+            ChangeSetStatus::Failed if is_no_changes(change_set.status_reason.as_deref()) => {
+                return Err(CreateChangeSetError::NoChanges(change_set))
+            }
+            ChangeSetStatus::Failed => return Err(CreateChangeSetError::Failed(change_set)),
+            _ => {
+                panic!(
+                    "change set {} had unexpected status: {}",
+                    change_set.id, change_set.status
+                );
             }
         }
-    })
+    }
 }
 
 pub(crate) async fn execute_change_set<Client: CloudFormation>(
@@ -224,6 +236,12 @@ fn is_already_exists(response: &BufferedHttpResponse) -> bool {
     TwoWaySearcher::new(b" already exists ")
         .search_in(&response.body)
         .is_some()
+}
+
+fn is_no_changes(status_reason: Option<&str>) -> bool {
+    status_reason
+        .unwrap_or_default()
+        .contains("The submitted information didn't contain changes.")
 }
 
 fn get_execute_status(change_set_type: ChangeSetType, stack_status: StackStatus) -> ExecuteStatus {

@@ -11,7 +11,7 @@ use rusoto_cloudformation::{
 use rusoto_core::RusotoError;
 use serde_plain::forward_display_to_serde;
 
-use crate::change_set::{create_change_set, execute_change_set, ChangeSet};
+use crate::change_set::{create_change_set, execute_change_set, ChangeSet, CreateChangeSetError};
 use crate::{ChangeSetStatus, ResourceStatus, StackEvent, StackEventDetails, StackStatus, Status};
 
 /// The input for the `apply` operation.
@@ -648,31 +648,22 @@ async fn create_change_set_internal<Client: CloudFormation>(
     client: &Client,
     input: ApplyInput,
 ) -> Result<Result<ChangeSet, ChangeSet>, ApplyError> {
-    let change_set = create_change_set(client, input.into_raw())
-        .map_err(ApplyError::from_rusoto_error)
-        .await?
-        .map_err(ApplyError::from_rusoto_error)
-        .await?
-        .map(Ok)
-        .or_else(|change_set| {
-            if change_set
+    let error = match create_change_set(client, input.into_raw()).await {
+        Ok(change_set) => return Ok(Ok(change_set)),
+        Err(error) => error,
+    };
+    match error {
+        CreateChangeSetError::NoChanges(change_set) => Ok(Err(change_set)),
+        CreateChangeSetError::CreateApi(error) => Err(ApplyError::from_rusoto_error(error)),
+        CreateChangeSetError::PollApi(error) => Err(ApplyError::from_rusoto_error(error)),
+        CreateChangeSetError::Failed(change_set) => Err(ApplyError::CreateChangeSetFailed {
+            id: change_set.id,
+            status: change_set.status,
+            status_reason: change_set
                 .status_reason
-                .as_deref()
-                .unwrap_or_default()
-                .contains("The submitted information didn't contain changes.")
-            {
-                Ok(Err(change_set))
-            } else {
-                Err(ApplyError::CreateChangeSetFailed {
-                    id: change_set.id,
-                    status: change_set.status,
-                    status_reason: change_set
-                        .status_reason
-                        .expect("ChangeSet failed without reason"),
-                })
-            }
-        })?;
-    Ok(change_set)
+                .expect("ChangeSet failed without reason"),
+        }),
+    }
 }
 
 async fn describe_output<Client: CloudFormation>(
