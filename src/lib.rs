@@ -5,8 +5,6 @@ mod change_set;
 mod event;
 mod status;
 
-pub mod raw;
-
 use rusoto_cloudformation::{CloudFormation, CloudFormationClient};
 
 pub use apply::{
