@@ -5,8 +5,8 @@ use rusoto_cloudformation::{CloudFormation, CloudFormationClient, DeleteStackInp
 use rusoto_core::HttpClient;
 use rusoto_credential::{AutoRefreshingProvider, ChainProvider};
 
-use rusoto_cloudformation_ext::{
-    ApplyError, ApplyEvent, ApplyInput, CloudFormationExt, ResourceStatus, StackStatus,
+use cloudformatious::{
+    ApplyError, ApplyEvent, ApplyInput, CloudFormatious, ResourceStatus, StackStatus,
 };
 
 const NAME_PREFIX: &str = "rusoto-cloudformation-ext-testing-";

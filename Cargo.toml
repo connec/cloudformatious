@@ -1,5 +1,5 @@
 [package]
-name = "rusoto_cloudformation_ext"
+name = "cloudformatious"
 version = "0.1.0"
 authors = ["Chris Connelly <chris@connec.co.uk>"]
 edition = "2018"

@@ -412,7 +412,7 @@ pub enum ApplyError {
     /// simply map this variant away:
     ///
     /// ```no_run
-    /// # use rusoto_cloudformation_ext::{ApplyError, ApplyOutput};
+    /// # use cloudformatious::{ApplyError, ApplyOutput};
     /// # fn main() -> Result<(), ApplyError> {
     /// # let output = todo!();
     /// # let resource_events = Vec::new();

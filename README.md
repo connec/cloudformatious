@@ -1,4 +1,4 @@
-# `rusoto_cloudformation_ext`
+# `cloudformatious`
 
 ⚠️ This crate is WIP.
 

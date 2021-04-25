@@ -16,7 +16,7 @@ pub use status::{
 };
 
 /// High-level CloudFormation operations.
-pub trait CloudFormationExt: CloudFormation + Sized + private::Sealed {
+pub trait CloudFormatious: CloudFormation + Sized + private::Sealed {
     /// Apply a CloudFormation template to an AWS environment.
     ///
     /// This is an idempotent operation that will create the indicated stack if it doesn't exist, or
@@ -31,7 +31,7 @@ pub trait CloudFormationExt: CloudFormation + Sized + private::Sealed {
     }
 }
 
-impl CloudFormationExt for CloudFormationClient {}
+impl CloudFormatious for CloudFormationClient {}
 
 mod private {
     use rusoto_cloudformation::CloudFormationClient;
