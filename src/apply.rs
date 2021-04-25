@@ -342,7 +342,7 @@ pub enum ApplyEvent {
 }
 
 /// Errors emitted by an `apply` operation.
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug)]
 #[allow(clippy::module_name_repetitions)]
 pub enum ApplyError {
     /// A CloudFormation API error occurred.
@@ -353,7 +353,7 @@ pub enum ApplyError {
     /// **Note:** the inner error will always be some variant of [`RusotoError`], but since they are
     /// generic over the type of service errors we either need a variant per API used, or `Box`. If
     /// you do need to programmatically match a particular API error you can use [`Box::downcast`].
-    CloudFormationApi(#[source] Box<dyn std::error::Error>),
+    CloudFormationApi(Box<dyn std::error::Error>),
 
     /// The change set failed to create.
     ///
@@ -516,6 +516,17 @@ impl fmt::Display for ApplyError {
                     )?;
                 }
                 Ok(())
+            }
+        }
+    }
+}
+
+impl std::error::Error for ApplyError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::CloudFormationApi(error) => Some(error.as_ref()),
+            Self::CreateChangeSetFailed { .. } | Self::Failure { .. } | Self::Warning { .. } => {
+                None
             }
         }
     }
