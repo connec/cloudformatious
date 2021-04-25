@@ -61,3 +61,12 @@ There is a `CloudFormatious` extension trait with an `apply` method, which imple
 It's roughly equivalent to the [`aws cloudformation deploy`](https://docs.aws.amazon.com/cli/latest/reference/cloudformation/deploy/index.html) command, but with better programmatic access to inputs, events, and outputs.
 
 I will probably want a similar '`Future` or `Stream`' API for stack deletion, but I have no needs beyond that for my current use cases.
+
+## Contributing
+
+Feedback and PRs are welcome.
+However, if you'd like to add any non-trivial functionality it may be worth opening an issue to discuss it first.
+
+## License
+
+[MIT](https://choosealicense.com/licenses/mit/)

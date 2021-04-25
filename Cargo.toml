@@ -2,6 +2,7 @@
 name = "cloudformatious"
 version = "0.1.0"
 authors = ["Chris Connelly <chris@connec.co.uk>"]
+license = "MIT"
 edition = "2018"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
