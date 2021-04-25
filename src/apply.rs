@@ -6,13 +6,12 @@ use async_stream::try_stream;
 use chrono::{DateTime, Utc};
 use futures_util::{pin_mut, Stream, TryFutureExt, TryStreamExt};
 use rusoto_cloudformation::{
-    CloudFormation, CreateChangeSetInput, DescribeStacksInput, ExecuteChangeSetInput, Stack, Tag,
+    CloudFormation, CreateChangeSetInput, DescribeStacksInput, Stack, Tag,
 };
 use rusoto_core::RusotoError;
 use serde_plain::forward_display_to_serde;
 
-use crate::change_set::{create_change_set, ChangeSet};
-use crate::raw::CloudFormationExt;
+use crate::change_set::{create_change_set, execute_change_set, ChangeSet};
 use crate::{ChangeSetStatus, ResourceStatus, StackEvent, StackEventDetails, StackStatus, Status};
 
 /// The input for the `apply` operation.
@@ -575,7 +574,10 @@ impl<'client> Apply<'client> {
             };
             let stack_id = change_set.stack_id.clone();
 
-            let event_stream = execute_change_set(client, change_set);
+            let event_stream = execute_change_set(client, change_set)
+                .map_err(ApplyError::from_rusoto_error)
+                .await?
+                .map_err(ApplyError::from_rusoto_error);
             pin_mut!(event_stream);
 
             let mut stack_error_status = None;
@@ -671,29 +673,6 @@ async fn create_change_set_internal<Client: CloudFormation>(
             }
         })?;
     Ok(change_set)
-}
-
-fn execute_change_set<Client: CloudFormation>(
-    client: &Client,
-    change_set: ChangeSet,
-) -> impl Stream<Item = Result<StackEvent, ApplyError>> + '_ {
-    try_stream! {
-        let execute_change_set_input = ExecuteChangeSetInput {
-            change_set_name: change_set.id,
-            ..ExecuteChangeSetInput::default()
-        };
-        let mut events = client
-            .execute_change_set_stream(change_set.stack_id, execute_change_set_input)
-            .map_err(ApplyError::from_rusoto_error)
-            .await?;
-        while let Some(event) = events
-            .try_next()
-            .map_err(ApplyError::from_rusoto_error)
-            .await?
-        {
-            yield StackEvent::from_raw(event);
-        }
-    }
 }
 
 async fn describe_output<Client: CloudFormation>(
