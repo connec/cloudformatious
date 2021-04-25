@@ -16,12 +16,15 @@ The identity to which the credentials pertain will need the following IAM policy
     "Version": "2012-10-17",
     "Statement": [
         {
-            "Sid": "CloudFormation Stack operations",
+            "Sid": "CloudFormationStackOperations",
             "Effect": "Allow",
             "Action": [
                 "cloudformation:CreateChangeSet",
                 "cloudformation:DeleteStack",
-                "cloudformation:DescribeChangeSet"
+                "cloudformation:DescribeChangeSet",
+                "cloudformation:DescribeStackEvents",
+                "cloudformation:DescribeStacks",
+                "cloudformation:ExecuteChangeSet"
             ],
             "Resource": "arn:aws:cloudformation:*:*:stack/rusoto-cloudformation-ext-testing-*"
         }
