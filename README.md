@@ -1,5 +1,8 @@
 # `cloudformatious`
 
+[![crates.io](https://img.shields.io/crates/v/cloudformatious?logo=rust&style=flat-square)](https://crates.io/crates/cloudformatious)
+[![docs.rs](https://img.shields.io/docsrs/cloudformatious?logo=rust&style=flat-square)](https://docs.rs/cloudformatious)
+
 ⚠️ This crate is WIP.
 
 An extension trait for [`rusoto_cloudformation::CloudFormationClient`](https://docs.rs/rusoto_cloudformation/0.46.0/rusoto_cloudformation/struct.CloudFormationClient.html) offering richly typed higher-level APIs to perform long-running operations and await their termination or observe their progress.
