@@ -17,6 +17,32 @@ use crate::change_set::{
 use crate::{ChangeSetStatus, ResourceStatus, StackEvent, StackEventDetails, StackStatus, Status};
 
 /// The input for the `apply` operation.
+///
+/// You can create an apply input via the [`new`] associated function. Setters are also available to
+/// make construction as ergonomic as possible.
+///
+/// ```no_run
+/// use rusoto_cloudformation::Tag;
+/// # use rusoto_cloudformation::CloudFormationClient;
+/// # use rusoto_core::Region;
+/// use cloudformatious::{ApplyInput, Capability, CloudFormatious, Parameter, TemplateSource};
+///
+/// # #[tokio::main]
+/// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// # let client = CloudFormationClient::new(Region::EuWest2);
+/// let input = ApplyInput::new("my-stack", TemplateSource::inline("{}"))
+///     .set_capabilities([Capability::Iam])
+///     .set_client_request_token("hello")
+///     .set_notification_arns(["arn:foo"])
+///     .set_parameters([Parameter { key: "hello".to_string(), value: "world".to_string() }])
+///     .set_resource_types(["AWS::IAM::Role"])
+///     .set_role_arn("arn:foo")
+///     .set_tags([Tag { key: "hello".to_string(), value: "world".to_string() }]);
+/// let output = client.apply(input).await?;
+/// // ...
+/// # Ok(())
+/// # }
+/// ```
 #[derive(Clone, Debug)]
 #[allow(clippy::module_name_repetitions)]
 pub struct ApplyInput {
@@ -108,6 +134,90 @@ pub struct ApplyInput {
 }
 
 impl ApplyInput {
+    /// Construct an input for the given `stack_name` and `template_source`.
+    pub fn new(stack_name: impl Into<String>, template_source: TemplateSource) -> Self {
+        Self {
+            stack_name: stack_name.into(),
+            template_source,
+
+            capabilities: Vec::new(),
+            client_request_token: None,
+            notification_arns: Vec::new(),
+            parameters: Vec::new(),
+            resource_types: None,
+            role_arn: None,
+            tags: Vec::new(),
+        }
+    }
+
+    /// Set the value for `capabilities`.
+    ///
+    /// **Note:** this consumes and returns `self` for chaining.
+    pub fn set_capabilities(mut self, capabilities: impl Into<Vec<Capability>>) -> Self {
+        self.capabilities = capabilities.into();
+        self
+    }
+
+    /// Set the value for `client_request_token`.
+    ///
+    /// **Note:** this consumes and returns `self` for chaining.
+    pub fn set_client_request_token(mut self, client_request_token: impl Into<String>) -> Self {
+        self.client_request_token = Some(client_request_token.into());
+        self
+    }
+
+    /// Set the value for `notification_arns`.
+    ///
+    /// **Note:** this consumes and returns `self` for chaining.
+    pub fn set_notification_arns<I, S>(mut self, notification_arns: I) -> Self
+    where
+        I: Into<Vec<S>>,
+        S: Into<String>,
+    {
+        self.notification_arns = notification_arns
+            .into()
+            .into_iter()
+            .map(Into::into)
+            .collect();
+        self
+    }
+
+    /// Set the value for `parameters`.
+    ///
+    /// **Note:** this consumes and returns `self` for chaining.
+    pub fn set_parameters(mut self, parameters: impl Into<Vec<Parameter>>) -> Self {
+        self.parameters = parameters.into();
+        self
+    }
+
+    /// Set the value for `resource_types`.
+    ///
+    /// **Note:** this consumes and returns `self` for chaining.
+    pub fn set_resource_types<I, S>(mut self, resource_types: I) -> Self
+    where
+        I: Into<Vec<S>>,
+        S: Into<String>,
+    {
+        self.resource_types = Some(resource_types.into().into_iter().map(Into::into).collect());
+        self
+    }
+
+    /// Set the value for `role_arn`.
+    ///
+    /// **Note:** this consumes and returns `self` for chaining.
+    pub fn set_role_arn(mut self, role_arn: impl Into<String>) -> Self {
+        self.role_arn = Some(role_arn.into());
+        self
+    }
+
+    /// Set the value for `tags`.
+    ///
+    /// **Note:** this consumes and returns `self` for chaining.
+    pub fn set_tags(mut self, tags: impl Into<Vec<Tag>>) -> Self {
+        self.tags = tags.into();
+        self
+    }
+
     fn into_raw(self) -> CreateChangeSetInput {
         let (template_body, template_url) = match self.template_source {
             TemplateSource::Inline { body } => (Some(body), None),

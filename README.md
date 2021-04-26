@@ -18,19 +18,7 @@ use cloudformatious::{ApplyEvent, ApplyInput, CloudFormatious, TemplateSource};
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let client = CloudFormationClient::new(Region::EuWest2);
 
-    // A builder for `ApplyInput` is high on the priority list...
-    let input = ApplyInput {
-        capabilities: Default::default(),
-        client_request_token: Default::default(),
-        notification_arns: Default::default(),
-        parameters: Default::default(),
-        resource_types: Default::default(),
-        role_arn: Default::default(),
-        stack_name: "my-stack".to_string(),
-        tags: Default::default(),
-        template_source: TemplateSource::inline("{}"),
-    };
-
+    let input = ApplyInput::new("my-stack", TemplateSource::inline("{}"));
     let mut apply = client.apply(input);
     let mut output = None; // A cleaner way of getting the output is also on the list...
 
