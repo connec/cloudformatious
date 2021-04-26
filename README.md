@@ -12,7 +12,7 @@ use futures_util::TryStreamExt;
 use rusoto_cloudformation::CloudFormationClient;
 use rusoto_core::Region;
 
-use cloudformatious::{ApplyEvent, ApplyInput, CloudFormatious};
+use cloudformatious::{ApplyEvent, ApplyInput, CloudFormatious, TemplateSource};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -28,8 +28,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         role_arn: Default::default(),
         stack_name: "my-stack".to_string(),
         tags: Default::default(),
-        template_body: Some("{}".to_string()),
-        template_url: Default::default()
+        template_source: TemplateSource::inline("{}"),
     };
 
     let mut apply = client.apply(input);

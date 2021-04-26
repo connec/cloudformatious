@@ -98,32 +98,21 @@ pub struct ApplyInput {
     /// maximum number of 50 tags can be specified.
     pub tags: Vec<Tag>,
 
-    /// Structure containing the template body with a minimum length of 1 byte and a maximum length
-    /// of 51,200 bytes.
+    /// Source for the template body to apply.
     ///
-    /// For more information, go to [Template Anatomy][1] in the AWS CloudFormation User Guide.
-    ///
-    /// Conditional: You must specify either the `template_body` or the `template_url` parameter,
-    /// but not both.
+    /// For more information about templates, go to [Template Anatomy][1] in the AWS CloudFormation
+    /// User Guide.
     ///
     /// [1]: https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/template-anatomy.html
-    pub template_body: Option<String>,
-
-    /// Location of file containing the template body.
-    ///
-    /// The URL must point to a template (max size: 460,800 bytes) that is located in an Amazon S3
-    /// bucket. For more information, go to the [Template Anatomy][1] in the AWS CloudFormation User
-    /// Guide.
-    ///
-    /// Conditional: You must specify either the `template_body` or the `template_url` parameter,
-    /// but not both.
-    ///
-    /// [1]: https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/template-anatomy.html
-    pub template_url: Option<String>,
+    pub template_source: TemplateSource,
 }
 
 impl ApplyInput {
     fn into_raw(self) -> CreateChangeSetInput {
+        let (template_body, template_url) = match self.template_source {
+            TemplateSource::Inline { body } => (Some(body), None),
+            TemplateSource::S3 { url } => (None, Some(url)),
+        };
         CreateChangeSetInput {
             capabilities: Some(self.capabilities.iter().map(ToString::to_string).collect()),
             change_set_name: format!("apply-{}", Utc::now().timestamp_millis()),
@@ -139,8 +128,8 @@ impl ApplyInput {
             role_arn: self.role_arn,
             stack_name: self.stack_name,
             tags: Some(self.tags),
-            template_body: self.template_body,
-            template_url: self.template_url,
+            template_body,
+            template_url,
             ..CreateChangeSetInput::default()
         }
     }
@@ -241,6 +230,48 @@ impl Parameter {
             parameter_value: Some(self.value),
             ..rusoto_cloudformation::Parameter::default()
         }
+    }
+}
+
+/// Source for a template body.
+///
+/// Templates can be specified for CloudFormation APIs in one of two ways:
+///
+/// - As a JSON string, inline with the request.
+/// - As a URL to a template file on S3.
+///
+/// See the variant documentation for more information.
+#[derive(Clone, Debug)]
+pub enum TemplateSource {
+    /// Structure containing the template body with a minimum length of 1 byte and a maximum length
+    /// of 51,200 bytes.
+    ///
+    /// For more information, go to [Template Anatomy][1] in the AWS CloudFormation User Guide.
+    ///
+    /// [1]: https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/template-anatomy.html
+    Inline { body: String },
+
+    /// Location of file containing the template body.
+    ///
+    /// The URL must point to a template (max size: 460,800 bytes) that is located in an Amazon S3
+    /// bucket. For more information, go to the [Template Anatomy][1] in the AWS CloudFormation User
+    /// Guide.
+    ///
+    /// [1]: https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/template-anatomy.html
+    S3 { url: String },
+}
+
+impl TemplateSource {
+    /// Construct an [`Inline`](Self::Inline) template source for the given `body`.
+    #[must_use]
+    pub fn inline(body: impl Into<String>) -> Self {
+        Self::Inline { body: body.into() }
+    }
+
+    /// Construct an [`S3`](Self::S3) template source for the given `url`.
+    #[must_use]
+    pub fn s3(url: impl Into<String>) -> Self {
+        Self::S3 { url: url.into() }
     }
 }
 

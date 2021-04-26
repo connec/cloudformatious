@@ -7,6 +7,7 @@ use rusoto_credential::{AutoRefreshingProvider, ChainProvider};
 
 use cloudformatious::{
     ApplyError, ApplyEvent, ApplyInput, CloudFormatious, ResourceStatus, StackStatus,
+    TemplateSource,
 };
 
 const NAME_PREFIX: &str = "rusoto-cloudformation-ext-testing-";
@@ -46,8 +47,7 @@ async fn create_stack_fut_ok() -> Result<(), Box<dyn std::error::Error>> {
         role_arn: None,
         stack_name: stack_name.clone(),
         tags: Vec::new(),
-        template_body: Some(DUMMY_TEMPLATE.to_string()),
-        template_url: None,
+        template_source: TemplateSource::inline(DUMMY_TEMPLATE),
     };
     let output = client.apply(input).await?;
     assert_eq!(output.stack_status, StackStatus::CreateComplete);
@@ -77,8 +77,7 @@ async fn create_stack_stream_ok() -> Result<(), Box<dyn std::error::Error>> {
         role_arn: None,
         stack_name: stack_name.clone(),
         tags: Vec::new(),
-        template_body: Some(DUMMY_TEMPLATE.to_string()),
-        template_url: None,
+        template_source: TemplateSource::inline(DUMMY_TEMPLATE),
     };
     let events: Vec<_> = client
         .apply(input)
@@ -132,8 +131,7 @@ async fn idempotent() -> Result<(), Box<dyn std::error::Error>> {
         role_arn: None,
         stack_name: stack_name.clone(),
         tags: Vec::new(),
-        template_body: Some(DUMMY_TEMPLATE.to_string()),
-        template_url: None,
+        template_source: TemplateSource::inline(DUMMY_TEMPLATE),
     };
     let output1 = client.apply(input.clone()).await?;
     let output2 = client.apply(input).await?;
@@ -165,8 +163,7 @@ async fn create_stack_fut_err() -> Result<(), Box<dyn std::error::Error>> {
         role_arn: None,
         stack_name: stack_name.clone(),
         tags: Vec::new(),
-        template_body: Some(FAILING_TEMPLATE.to_string()),
-        template_url: None,
+        template_source: TemplateSource::inline(FAILING_TEMPLATE),
     };
     let error = client.apply(input).await.unwrap_err();
     if let ApplyError::Failure {
@@ -221,8 +218,7 @@ async fn create_stack_stream_err() -> Result<(), Box<dyn std::error::Error>> {
         role_arn: None,
         stack_name: stack_name.clone(),
         tags: Vec::new(),
-        template_body: Some(FAILING_TEMPLATE.to_string()),
-        template_url: None,
+        template_source: TemplateSource::inline(FAILING_TEMPLATE),
     };
     let events: Vec<_> = client
         .apply(input)
@@ -315,8 +311,7 @@ async fn create_change_set_fut_err() -> Result<(), Box<dyn std::error::Error>> {
         role_arn: None,
         stack_name: stack_name.clone(),
         tags: Vec::new(),
-        template_body: Some("".to_string()),
-        template_url: None,
+        template_source: TemplateSource::inline(""),
     };
     let error = client.apply(input).await.unwrap_err();
     if let ApplyError::CloudFormationApi { .. } = error {
@@ -341,8 +336,7 @@ async fn update_stack_fut_err() -> Result<(), Box<dyn std::error::Error>> {
         role_arn: None,
         stack_name: stack_name.clone(),
         tags: Vec::new(),
-        template_body: Some(DUMMY_TEMPLATE.to_string()),
-        template_url: None,
+        template_source: TemplateSource::inline(DUMMY_TEMPLATE),
     };
     let output = client.apply(input).await?;
     assert_eq!(output.stack_status, StackStatus::CreateComplete);
@@ -356,8 +350,7 @@ async fn update_stack_fut_err() -> Result<(), Box<dyn std::error::Error>> {
         role_arn: None,
         stack_name: stack_name.clone(),
         tags: Vec::new(),
-        template_body: Some(FAILING_TEMPLATE.to_string()),
-        template_url: None,
+        template_source: TemplateSource::inline(FAILING_TEMPLATE),
     };
     let error = client.apply(input).await.unwrap_err();
     if let ApplyError::Failure {
