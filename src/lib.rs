@@ -1,15 +1,15 @@
 #![warn(clippy::pedantic)]
 
-mod apply;
+mod apply_stack;
 mod change_set;
 mod event;
 mod status;
 
 use rusoto_cloudformation::{CloudFormation, CloudFormationClient};
 
-pub use apply::{
-    Apply, ApplyError, ApplyEvents, ApplyInput, ApplyOutput, Capability, Parameter, StackOutput,
-    TemplateSource,
+pub use apply_stack::{
+    ApplyStack, ApplyStackError, ApplyStackEvents, ApplyStackInput, ApplyStackOutput, Capability,
+    Parameter, StackOutput, TemplateSource,
 };
 pub use event::{StackEvent, StackEventDetails};
 pub use status::{
@@ -18,7 +18,7 @@ pub use status::{
 
 /// High-level CloudFormation operations.
 pub trait CloudFormatious: CloudFormation + Sized + private::Sealed {
-    /// Apply a CloudFormation template to an AWS environment.
+    /// Apply a CloudFormation stack to an AWS environment.
     ///
     /// This is an idempotent operation that will create the indicated stack if it doesn't exist, or
     /// update it if it does. It is not an error for there to be no changes.
@@ -30,8 +30,8 @@ pub trait CloudFormatious: CloudFormation + Sized + private::Sealed {
     /// used to simply wait for the operation to complete, or the `Stream` implementation can be
     /// used to react to stack events that occur during the operation. See the [`Apply`] struct for
     /// more details.
-    fn apply(&self, input: ApplyInput) -> Apply {
-        Apply::new(self, input)
+    fn apply_stack(&self, input: ApplyStackInput) -> ApplyStack {
+        ApplyStack::new(self, input)
     }
 }
 

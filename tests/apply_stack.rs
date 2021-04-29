@@ -6,7 +6,7 @@ use rusoto_core::HttpClient;
 use rusoto_credential::{AutoRefreshingProvider, ChainProvider};
 
 use cloudformatious::{
-    ApplyError, ApplyInput, CloudFormatious, ResourceStatus, StackStatus, TemplateSource,
+    ApplyStackError, ApplyStackInput, CloudFormatious, ResourceStatus, StackStatus, TemplateSource,
 };
 
 const NAME_PREFIX: &str = "rusoto-cloudformation-ext-testing-";
@@ -37,8 +37,8 @@ async fn create_stack_fut_ok() -> Result<(), Box<dyn std::error::Error>> {
     let client = get_client();
 
     let stack_name = generated_name();
-    let input = ApplyInput::new(&stack_name, TemplateSource::inline(DUMMY_TEMPLATE));
-    let output = client.apply(input).await?;
+    let input = ApplyStackInput::new(&stack_name, TemplateSource::inline(DUMMY_TEMPLATE));
+    let output = client.apply_stack(input).await?;
     assert_eq!(output.stack_status, StackStatus::CreateComplete);
 
     // Clean-up
@@ -57,10 +57,10 @@ async fn create_stack_stream_ok() -> Result<(), Box<dyn std::error::Error>> {
     let client = get_client();
 
     let stack_name = generated_name();
-    let input = ApplyInput::new(&stack_name, TemplateSource::inline(DUMMY_TEMPLATE));
-    let mut apply = client.apply(input);
+    let input = ApplyStackInput::new(&stack_name, TemplateSource::inline(DUMMY_TEMPLATE));
+    let mut stack = client.apply_stack(input);
 
-    let events: Vec<_> = apply
+    let events: Vec<_> = stack
         .events()
         .map(|event| {
             (
@@ -70,7 +70,7 @@ async fn create_stack_stream_ok() -> Result<(), Box<dyn std::error::Error>> {
         })
         .collect()
         .await;
-    let output = apply.await?;
+    let output = stack.await?;
 
     assert_eq!(output.stack_status, StackStatus::CreateComplete);
     assert_eq!(
@@ -97,9 +97,9 @@ async fn idempotent() -> Result<(), Box<dyn std::error::Error>> {
     let client = get_client();
 
     let stack_name = generated_name();
-    let input = ApplyInput::new(&stack_name, TemplateSource::inline(DUMMY_TEMPLATE));
-    let output1 = client.apply(input.clone()).await?;
-    let output2 = client.apply(input).await?;
+    let input = ApplyStackInput::new(&stack_name, TemplateSource::inline(DUMMY_TEMPLATE));
+    let output1 = client.apply_stack(input.clone()).await?;
+    let output2 = client.apply_stack(input).await?;
     assert_eq!(output2.stack_status, StackStatus::CreateComplete);
     assert_eq!(output1, output2);
 
@@ -119,9 +119,9 @@ async fn create_stack_fut_err() -> Result<(), Box<dyn std::error::Error>> {
     let client = get_client();
 
     let stack_name = generated_name();
-    let input = ApplyInput::new(&stack_name, TemplateSource::inline(FAILING_TEMPLATE));
-    let error = client.apply(input).await.unwrap_err();
-    if let ApplyError::Failure {
+    let input = ApplyStackInput::new(&stack_name, TemplateSource::inline(FAILING_TEMPLATE));
+    let error = client.apply_stack(input).await.unwrap_err();
+    if let ApplyStackError::Failure {
         stack_status,
         stack_status_reason,
         resource_events,
@@ -167,10 +167,10 @@ async fn create_stack_stream_err() -> Result<(), Box<dyn std::error::Error>> {
     let client = get_client();
 
     let stack_name = generated_name();
-    let input = ApplyInput::new(&stack_name, TemplateSource::inline(FAILING_TEMPLATE));
-    let mut apply = client.apply(input);
+    let input = ApplyStackInput::new(&stack_name, TemplateSource::inline(FAILING_TEMPLATE));
+    let mut stack = client.apply_stack(input);
 
-    let events: Vec<_> = apply
+    let events: Vec<_> = stack
         .events()
         .map(|event| {
             (
@@ -180,7 +180,7 @@ async fn create_stack_stream_err() -> Result<(), Box<dyn std::error::Error>> {
         })
         .collect()
         .await;
-    let error = apply.await.unwrap_err();
+    let error = stack.await.unwrap_err();
 
     assert_eq!(
         events,
@@ -192,7 +192,7 @@ async fn create_stack_stream_err() -> Result<(), Box<dyn std::error::Error>> {
             (stack_name.clone(), "ROLLBACK_COMPLETE".to_string()),
         ]
     );
-    if let ApplyError::Failure {
+    if let ApplyStackError::Failure {
         stack_status,
         stack_status_reason,
         resource_events,
@@ -238,9 +238,9 @@ async fn create_change_set_fut_err() -> Result<(), Box<dyn std::error::Error>> {
     let client = get_client();
 
     let stack_name = generated_name();
-    let input = ApplyInput::new(&stack_name, TemplateSource::inline(""));
-    let error = client.apply(input).await.unwrap_err();
-    if let ApplyError::CloudFormationApi { .. } = error {
+    let input = ApplyStackInput::new(&stack_name, TemplateSource::inline(""));
+    let error = client.apply_stack(input).await.unwrap_err();
+    if let ApplyStackError::CloudFormationApi { .. } = error {
     } else {
         return Err(error.into());
     }
@@ -253,13 +253,13 @@ async fn update_stack_fut_err() -> Result<(), Box<dyn std::error::Error>> {
     let client = get_client();
 
     let stack_name = generated_name();
-    let input = ApplyInput::new(&stack_name, TemplateSource::inline(DUMMY_TEMPLATE));
-    let output = client.apply(input).await?;
+    let input = ApplyStackInput::new(&stack_name, TemplateSource::inline(DUMMY_TEMPLATE));
+    let output = client.apply_stack(input).await?;
     assert_eq!(output.stack_status, StackStatus::CreateComplete);
 
-    let input = ApplyInput::new(&stack_name, TemplateSource::inline(FAILING_TEMPLATE));
-    let error = client.apply(input).await.unwrap_err();
-    if let ApplyError::Failure {
+    let input = ApplyStackInput::new(&stack_name, TemplateSource::inline(FAILING_TEMPLATE));
+    let error = client.apply_stack(input).await.unwrap_err();
+    if let ApplyStackError::Failure {
         stack_status,
         stack_status_reason,
         resource_events,

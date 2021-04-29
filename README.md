@@ -12,21 +12,21 @@ use futures_util::StreamExt;
 use rusoto_cloudformation::CloudFormationClient;
 use rusoto_core::Region;
 
-use cloudformatious::{ApplyInput, CloudFormatious, TemplateSource};
+use cloudformatious::{ApplyStackInput, CloudFormatious, TemplateSource};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let client = CloudFormationClient::new(Region::EuWest2);
 
-    let input = ApplyInput::new("my-stack", TemplateSource::inline("{}"));
-    let mut apply = client.apply(input);
+    let input = ApplyStackInput::new("my-stack", TemplateSource::inline("{}"));
+    let mut stack = client.apply_stack(input);
 
-    let mut events = apply.events();
+    let mut events = stack.events();
     while let Some(event) = events.next().await {
         eprintln!("{:#?}", event);
     };
 
-    let output = apply.await?;
+    let output = stack.await?;
     eprintln!("Apply success!");
     println!("{:#?}", output);
 
@@ -45,7 +45,7 @@ Also, I like CloudFormation and programming in Rust so this is fun for me ðŸ¤·â€
 
 ## Current status
 
-There is a `CloudFormatious` extension trait with an `apply` method, which implements an idempotent 'update or create stack' operation.
+There is a `CloudFormatious` extension trait with an `apply_stack` method, which implements an idempotent 'update or create stack' operation.
 It's roughly equivalent to the [`aws cloudformation deploy`](https://docs.aws.amazon.com/cli/latest/reference/cloudformation/deploy/index.html) command, but with better programmatic access to inputs, events, and outputs.
 
 I will probably want a similar '`Future` or `Stream`' API for stack deletion, but I have no needs beyond that for my current use cases.

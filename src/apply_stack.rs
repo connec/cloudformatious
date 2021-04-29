@@ -16,21 +16,21 @@ use crate::change_set::{
 };
 use crate::{ChangeSetStatus, ResourceStatus, StackEvent, StackEventDetails, StackStatus, Status};
 
-/// The input for the `apply` operation.
+/// The input for the `apply_stack` operation.
 ///
-/// You can create an apply input via the [`new`] associated function. Setters are also available to
-/// make construction as ergonomic as possible.
+/// You can create an apply stack input via the [`new`] associated function. Setters are also
+/// available to make construction as ergonomic as possible.
 ///
 /// ```no_run
 /// use rusoto_cloudformation::Tag;
 /// # use rusoto_cloudformation::CloudFormationClient;
 /// # use rusoto_core::Region;
-/// use cloudformatious::{ApplyInput, Capability, CloudFormatious, Parameter, TemplateSource};
+/// use cloudformatious::{ApplyStackInput, Capability, CloudFormatious, Parameter, TemplateSource};
 ///
 /// # #[tokio::main]
 /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// # let client = CloudFormationClient::new(Region::EuWest2);
-/// let input = ApplyInput::new("my-stack", TemplateSource::inline("{}"))
+/// let input = ApplyStackInput::new("my-stack", TemplateSource::inline("{}"))
 ///     .set_capabilities([Capability::Iam])
 ///     .set_client_request_token("hello")
 ///     .set_notification_arns(["arn:foo"])
@@ -38,24 +38,24 @@ use crate::{ChangeSetStatus, ResourceStatus, StackEvent, StackEventDetails, Stac
 ///     .set_resource_types(["AWS::IAM::Role"])
 ///     .set_role_arn("arn:foo")
 ///     .set_tags([Tag { key: "hello".to_string(), value: "world".to_string() }]);
-/// let output = client.apply(input).await?;
+/// let output = client.apply_stack(input).await?;
 /// // ...
 /// # Ok(())
 /// # }
 /// ```
 #[derive(Clone, Debug)]
 #[allow(clippy::module_name_repetitions)]
-pub struct ApplyInput {
+pub struct ApplyStackInput {
     /// Capabilities to explicitly acknowledge.
     ///
     /// See [`Capability`] for more information.
     pub capabilities: Vec<Capability>,
 
-    /// A unique identifier for this `apply` operation.
+    /// A unique identifier for this `apply_stack` operation.
     ///
     /// Specify this token if you plan to retry requests so that AWS CloudFormation knows that
-    /// you're not attempting to apply a stack with the same name. You might retry `apply` requests
-    /// to ensure that AWS CloudFormation successfully received them.
+    /// you're not attempting to apply a stack with the same name. You might retry `apply_stack`
+    /// requests to ensure that AWS CloudFormation successfully received them.
     ///
     /// All events triggered by a given stack operation are assigned the same client request token,
     /// which are used to track operations. If you do not specify a specific client request token,
@@ -77,7 +77,7 @@ pub struct ApplyInput {
     /// values of parameters.
     pub parameters: Vec<Parameter>,
 
-    /// The template resource types that you have permissions to work with for this `apply`
+    /// The template resource types that you have permissions to work with for this `apply_stack`
     /// operation, such as `AWS::EC2::Instance`, `AWS::EC2::*`, or `Custom::MyCustomInstance`.
     ///
     /// Use the following syntax to describe template resource types:
@@ -133,7 +133,7 @@ pub struct ApplyInput {
     pub template_source: TemplateSource,
 }
 
-impl ApplyInput {
+impl ApplyStackInput {
     /// Construct an input for the given `stack_name` and `template_source`.
     pub fn new(stack_name: impl Into<String>, template_source: TemplateSource) -> Self {
         Self {
@@ -225,7 +225,7 @@ impl ApplyInput {
         };
         CreateChangeSetInput {
             capabilities: Some(self.capabilities.iter().map(ToString::to_string).collect()),
-            change_set_name: format!("apply-{}", Utc::now().timestamp_millis()),
+            change_set_name: format!("apply-stack-{}", Utc::now().timestamp_millis()),
             change_set_type: Some("CREATE".to_string()),
             notification_ar_ns: Some(self.notification_arns),
             parameters: Some(
@@ -320,7 +320,7 @@ pub enum Capability {
 
 forward_display_to_serde!(Capability);
 
-/// An input parameter for an `apply` operation.
+/// An input parameter for an `apply_stack` operation.
 ///
 /// Note that, unlike when directly updating a stack, it is not possible to reuse previous
 /// values of parameters.
@@ -385,10 +385,10 @@ impl TemplateSource {
     }
 }
 
-/// The output of the `apply` operation.
+/// The output of the `apply_stack` operation.
 #[derive(Debug, PartialEq)]
 #[allow(clippy::module_name_repetitions)]
-pub struct ApplyOutput {
+pub struct ApplyStackOutput {
     /// The unique ID of the change set.
     pub change_set_id: String,
 
@@ -419,7 +419,7 @@ pub struct ApplyOutput {
     pub tags: Vec<Tag>,
 }
 
-impl ApplyOutput {
+impl ApplyStackOutput {
     fn from_raw(stack: Stack) -> Self {
         Self {
             change_set_id: stack.change_set_id.expect("Stack without change_set_id"),
@@ -456,7 +456,7 @@ impl ApplyOutput {
     }
 }
 
-/// An output from an `apply` operation.
+/// An output from an `apply_stack` operation.
 #[derive(Debug, PartialEq)]
 pub struct StackOutput {
     /// User defined description associated with the output.
@@ -472,10 +472,10 @@ pub struct StackOutput {
     pub value: String,
 }
 
-/// Errors emitted by an `apply` operation.
+/// Errors emitted by an `apply_stack` operation.
 #[derive(Debug)]
 #[allow(clippy::module_name_repetitions)]
-pub enum ApplyError {
+pub enum ApplyStackError {
     /// A CloudFormation API error occurred.
     ///
     /// This is likely to be due to invalid input parameters or missing CloudFormation permissions.
@@ -502,7 +502,7 @@ pub enum ApplyError {
         status_reason: String,
     },
 
-    /// The apply operation failed.
+    /// The apply stack operation failed.
     ///
     /// This error tries to capture enough information to quickly identify the root-cause of the
     /// operation's failure (such as not having permission to create or update a particular resource
@@ -530,25 +530,25 @@ pub enum ApplyError {
         resource_events: Vec<(ResourceStatus, StackEventDetails)>,
     },
 
-    /// The apply operation succeeded with warnings.
+    /// The apply stack operation succeeded with warnings.
     ///
     /// It is possible for resource errors to occur even when the overall operation succeeds, such
     /// as failing to delete a resource during clean-up after a successful update. Rather than
     /// letting this pass silently, or relying on carefully interrogating `StackEvent`s, the
     /// operation returns an error.
     ///
-    /// Note that the error includes the [`ApplyOutput`], since the stack did settle into a
+    /// Note that the error includes the [`ApplyStackOutput`], since the stack did settle into a
     /// successful status. If you don't care about non-critical resource errors you can use this to
     /// simply map this variant away:
     ///
     /// ```no_run
-    /// # use cloudformatious::{ApplyError, ApplyOutput};
-    /// # fn main() -> Result<(), ApplyError> {
+    /// # use cloudformatious::{ApplyStackError, ApplyStackOutput};
+    /// # fn main() -> Result<(), ApplyStackError> {
     /// # let output = todo!();
     /// # let resource_events = Vec::new();
-    /// let result = Err(ApplyError::Warning { output, resource_events });
+    /// let result = Err(ApplyStackError::Warning { output, resource_events });
     /// result.or_else(|error| {
-    ///     if let ApplyError::Warning { output, .. } = error {
+    ///     if let ApplyStackError::Warning { output, .. } = error {
     ///         Ok(output)
     ///     } else {
     ///         Err(error)
@@ -559,7 +559,7 @@ pub enum ApplyError {
     /// ```
     Warning {
         /// The operation output.
-        output: ApplyOutput,
+        output: ApplyStackOutput,
 
         /// Resource events with negative statuses that did not affect the overall operation.
         ///
@@ -570,13 +570,13 @@ pub enum ApplyError {
     },
 }
 
-impl ApplyError {
+impl ApplyStackError {
     fn from_rusoto_error<E: std::error::Error + 'static>(error: RusotoError<E>) -> Self {
         Self::CloudFormationApi(error.into())
     }
 }
 
-impl fmt::Display for ApplyError {
+impl fmt::Display for ApplyStackError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::CloudFormationApi(error) => {
@@ -652,7 +652,7 @@ impl fmt::Display for ApplyError {
     }
 }
 
-impl std::error::Error for ApplyError {
+impl std::error::Error for ApplyStackError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::CloudFormationApi(error) => Some(error.as_ref()),
@@ -663,32 +663,32 @@ impl std::error::Error for ApplyError {
     }
 }
 
-/// An ongoing `apply` operation.
+/// An ongoing `apply_stack` operation.
 ///
 /// This implements both `Future` and `Stream`, depending on whether or not it's desired to react to
 /// stack progress or simply wait for the operation to conclude.
-pub struct Apply<'client> {
-    event_stream: Pin<Box<dyn Stream<Item = Result<ApplyEvent, ApplyError>> + 'client>>,
+pub struct ApplyStack<'client> {
+    event_stream: Pin<Box<dyn Stream<Item = Result<ApplyStackEvent, ApplyStackError>> + 'client>>,
 
-    // The `ApplyOutput` is moved here once it's been emitted by the stream.
-    output: Option<Result<ApplyOutput, ApplyError>>,
+    // The `ApplyStackOutput` is moved here once it's been emitted by the stream.
+    output: Option<Result<ApplyStackOutput, ApplyStackError>>,
 }
 
-impl<'client> Apply<'client> {
+impl<'client> ApplyStack<'client> {
     pub(crate) fn new<Client: CloudFormation>(
         client: &'client Client,
-        mut input: ApplyInput,
+        mut input: ApplyStackInput,
     ) -> Self {
         let event_stream = try_stream! {
             input
                 .client_request_token
-                .get_or_insert_with(|| format!("apply-{}", Utc::now().timestamp_millis()));
+                .get_or_insert_with(|| format!("apply-stack-{}", Utc::now().timestamp_millis()));
 
             let change_set = match create_change_set_internal(client, input).await? {
                 Ok(change_set) => change_set,
                 Err(change_set) => {
                     let output = describe_output(client, change_set.stack_id).await?;
-                    yield ApplyEvent::Output(output);
+                    yield ApplyStackEvent::Output(output);
                     return;
                 },
             };
@@ -696,11 +696,11 @@ impl<'client> Apply<'client> {
 
             let mut execution = ExecuteChangeSet::new(client, stack_id, change_set);
             while let Some(event) = execution.try_next().await? {
-                yield ApplyEvent::Event(event);
+                yield ApplyStackEvent::Event(event);
             }
 
             let output = execution.try_into_output().await?;
-            yield ApplyEvent::Output(output);
+            yield ApplyStackEvent::Output(output);
         };
         Self {
             event_stream: Box::pin(event_stream),
@@ -709,16 +709,18 @@ impl<'client> Apply<'client> {
     }
 
     /// Get a `Stream` of `StackEvent`s.
-    pub fn events(&mut self) -> ApplyEvents<'client, '_> {
-        ApplyEvents(self)
+    pub fn events(&mut self) -> ApplyStackEvents<'client, '_> {
+        ApplyStackEvents(self)
     }
 
     fn poll_next_internal(&mut self, ctx: &mut task::Context) -> task::Poll<Option<StackEvent>> {
         match self.event_stream.as_mut().poll_next(ctx) {
             task::Poll::Pending => task::Poll::Pending,
             task::Poll::Ready(None) => task::Poll::Ready(None),
-            task::Poll::Ready(Some(Ok(ApplyEvent::Event(event)))) => task::Poll::Ready(Some(event)),
-            task::Poll::Ready(Some(Ok(ApplyEvent::Output(output)))) => {
+            task::Poll::Ready(Some(Ok(ApplyStackEvent::Event(event)))) => {
+                task::Poll::Ready(Some(event))
+            }
+            task::Poll::Ready(Some(Ok(ApplyStackEvent::Output(output)))) => {
                 self.output.replace(Ok(output));
                 task::Poll::Ready(None)
             }
@@ -730,8 +732,8 @@ impl<'client> Apply<'client> {
     }
 }
 
-impl Future for Apply<'_> {
-    type Output = Result<ApplyOutput, ApplyError>;
+impl Future for ApplyStack<'_> {
+    type Output = Result<ApplyStackOutput, ApplyStackError>;
 
     fn poll(mut self: Pin<&mut Self>, ctx: &mut task::Context) -> task::Poll<Self::Output> {
         loop {
@@ -750,11 +752,11 @@ impl Future for Apply<'_> {
     }
 }
 
-/// Return value of [`Apply::events`].
+/// Return value of [`ApplyStack::events`].
 #[allow(clippy::module_name_repetitions)]
-pub struct ApplyEvents<'client, 'apply>(&'apply mut Apply<'client>);
+pub struct ApplyStackEvents<'client, 'apply>(&'apply mut ApplyStack<'client>);
 
-impl Stream for ApplyEvents<'_, '_> {
+impl Stream for ApplyStackEvents<'_, '_> {
     type Item = StackEvent;
 
     fn poll_next(
@@ -765,28 +767,28 @@ impl Stream for ApplyEvents<'_, '_> {
     }
 }
 
-/// Events emitted by an `apply` operation internally.
-enum ApplyEvent {
-    /// A stack event emitted by CloudFormation during the `apply` operation.
+/// Events emitted by an `apply_stack` operation internally.
+enum ApplyStackEvent {
+    /// A stack event emitted by CloudFormation during the `apply_stack` operation.
     Event(StackEvent),
 
-    /// The output of the `apply` operation (meaning it has concluded successfully).
-    Output(ApplyOutput),
+    /// The output of the `apply_stack` operation (meaning it has concluded successfully).
+    Output(ApplyStackOutput),
 }
 
 async fn create_change_set_internal<Client: CloudFormation>(
     client: &Client,
-    input: ApplyInput,
-) -> Result<Result<ChangeSet, ChangeSet>, ApplyError> {
+    input: ApplyStackInput,
+) -> Result<Result<ChangeSet, ChangeSet>, ApplyStackError> {
     let error = match create_change_set(client, input.into_raw()).await {
         Ok(change_set) => return Ok(Ok(change_set)),
         Err(error) => error,
     };
     match error {
         CreateChangeSetError::NoChanges(change_set) => Ok(Err(change_set)),
-        CreateChangeSetError::CreateApi(error) => Err(ApplyError::from_rusoto_error(error)),
-        CreateChangeSetError::PollApi(error) => Err(ApplyError::from_rusoto_error(error)),
-        CreateChangeSetError::Failed(change_set) => Err(ApplyError::CreateChangeSetFailed {
+        CreateChangeSetError::CreateApi(error) => Err(ApplyStackError::from_rusoto_error(error)),
+        CreateChangeSetError::PollApi(error) => Err(ApplyStackError::from_rusoto_error(error)),
+        CreateChangeSetError::Failed(change_set) => Err(ApplyStackError::CreateChangeSetFailed {
             id: change_set.id,
             status: change_set.status,
             status_reason: change_set
@@ -824,10 +826,12 @@ where
     fn process_event(
         &mut self,
         event: Result<StackEvent, ExecuteChangeSetError>,
-    ) -> Result<StackEvent, ApplyError> {
+    ) -> Result<StackEvent, ApplyStackError> {
         let event = event.or_else(|error| match error {
-            ExecuteChangeSetError::ExecuteApi(error) => Err(ApplyError::from_rusoto_error(error)),
-            ExecuteChangeSetError::PollApi(error) => Err(ApplyError::from_rusoto_error(error)),
+            ExecuteChangeSetError::ExecuteApi(error) => {
+                Err(ApplyStackError::from_rusoto_error(error))
+            }
+            ExecuteChangeSetError::PollApi(error) => Err(ApplyStackError::from_rusoto_error(error)),
             ExecuteChangeSetError::Failed { status, event } => {
                 self.stack_error_status = Some(status);
                 Ok(event)
@@ -858,9 +862,9 @@ where
         Ok(event)
     }
 
-    async fn try_into_output(self) -> Result<ApplyOutput, ApplyError> {
+    async fn try_into_output(self) -> Result<ApplyStackOutput, ApplyStackError> {
         if let Some(stack_status) = self.stack_error_status {
-            return Err(ApplyError::Failure {
+            return Err(ApplyStackError::Failure {
                 stack_id: self.stack_id,
                 stack_status,
                 stack_status_reason: self
@@ -875,7 +879,7 @@ where
         if self.resource_error_events.is_empty() {
             Ok(output)
         } else {
-            Err(ApplyError::Warning {
+            Err(ApplyStackError::Warning {
                 output,
                 resource_events: self.resource_error_events,
             })
@@ -887,7 +891,7 @@ impl<'client, Client> Stream for ExecuteChangeSet<'client, Client>
 where
     Client: CloudFormation,
 {
-    type Item = Result<StackEvent, ApplyError>;
+    type Item = Result<StackEvent, ApplyStackError>;
 
     fn poll_next(
         mut self: Pin<&mut Self>,
@@ -907,18 +911,18 @@ where
 async fn describe_output<Client: CloudFormation>(
     client: &Client,
     stack_id: String,
-) -> Result<ApplyOutput, ApplyError> {
+) -> Result<ApplyStackOutput, ApplyStackError> {
     let describe_stacks_input = DescribeStacksInput {
         stack_name: Some(stack_id),
         ..DescribeStacksInput::default()
     };
     let stack = client
         .describe_stacks(describe_stacks_input)
-        .map_err(ApplyError::from_rusoto_error)
+        .map_err(ApplyStackError::from_rusoto_error)
         .await?
         .stacks
         .expect("DescribeStacksOutput without stacks")
         .pop()
         .expect("DescribeStacksOutput empty stacks");
-    Ok(ApplyOutput::from_raw(stack))
+    Ok(ApplyStackOutput::from_raw(stack))
 }
