@@ -19,8 +19,8 @@ use crate::{
 
 /// The input for the `apply_stack` operation.
 ///
-/// You can create an apply stack input via the [`new`] associated function. Setters are also
-/// available to make construction as ergonomic as possible.
+/// You can create an apply stack input via the [`new`](Self::new) associated function. Setters are
+/// also available to make construction as ergonomic as possible.
 ///
 /// ```no_run
 /// use rusoto_cloudformation::Tag;
