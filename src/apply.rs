@@ -674,6 +674,41 @@ pub struct Apply<'client> {
     output: Option<Result<ApplyOutput, ApplyError>>,
 }
 
+impl<'client> Apply<'client> {
+    pub(crate) fn new<Client: CloudFormation>(
+        client: &'client Client,
+        mut input: ApplyInput,
+    ) -> Self {
+        let event_stream = try_stream! {
+            input
+                .client_request_token
+                .get_or_insert_with(|| format!("apply-{}", Utc::now().timestamp_millis()));
+
+            let change_set = match create_change_set_internal(client, input).await? {
+                Ok(change_set) => change_set,
+                Err(change_set) => {
+                    let output = describe_output(client, change_set.stack_id).await?;
+                    yield ApplyEvent::Output(output);
+                    return;
+                },
+            };
+            let stack_id = change_set.stack_id.clone();
+
+            let mut execution = ExecuteChangeSet::new(client, stack_id, change_set);
+            while let Some(event) = execution.try_next().await? {
+                yield ApplyEvent::Event(event);
+            }
+
+            let output = execution.try_into_output().await?;
+            yield ApplyEvent::Output(output);
+        };
+        Self {
+            event_stream: Box::pin(event_stream),
+            output: None,
+        }
+    }
+}
+
 impl Future for Apply<'_> {
     type Output = Result<ApplyOutput, ApplyError>;
 
@@ -713,41 +748,6 @@ impl Stream for Apply<'_> {
                 self.output.replace(Err(error));
                 task::Poll::Ready(None)
             }
-        }
-    }
-}
-
-impl<'client> Apply<'client> {
-    pub(crate) fn new<Client: CloudFormation>(
-        client: &'client Client,
-        mut input: ApplyInput,
-    ) -> Self {
-        let event_stream = try_stream! {
-            input
-                .client_request_token
-                .get_or_insert_with(|| format!("apply-{}", Utc::now().timestamp_millis()));
-
-            let change_set = match create_change_set_internal(client, input).await? {
-                Ok(change_set) => change_set,
-                Err(change_set) => {
-                    let output = describe_output(client, change_set.stack_id).await?;
-                    yield ApplyEvent::Output(output);
-                    return;
-                },
-            };
-            let stack_id = change_set.stack_id.clone();
-
-            let mut execution = ExecuteChangeSet::new(client, stack_id, change_set);
-            while let Some(event) = execution.try_next().await? {
-                yield ApplyEvent::Event(event);
-            }
-
-            let output = execution.try_into_output().await?;
-            yield ApplyEvent::Output(output);
-        };
-        Self {
-            event_stream: Box::pin(event_stream),
-            output: None,
         }
     }
 }
