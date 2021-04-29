@@ -8,6 +8,7 @@ use crate::{ResourceStatus, StackEventDetails, StackStatus};
 /// operation's failure (such as not having permission to create or update a particular resource
 /// in the stack).
 #[derive(Debug)]
+#[allow(clippy::module_name_repetitions)]
 pub struct StackFailure {
     /// The ID of the stack.
     pub stack_id: String,
@@ -67,6 +68,7 @@ impl fmt::Display for StackFailure {
 /// letting this pass silently, or relying on carefully interrogating `StackEvent`s, the
 /// operation returns an error.
 #[derive(Debug)]
+#[allow(clippy::module_name_repetitions)]
 pub struct StackWarning {
     /// The ID of the stack.
     pub stack_id: String,

@@ -2,8 +2,8 @@
 
 mod apply_stack;
 mod change_set;
-mod error;
 mod event;
+mod stack;
 mod status;
 
 use rusoto_cloudformation::{CloudFormation, CloudFormationClient};
@@ -12,8 +12,8 @@ pub use apply_stack::{
     ApplyStack, ApplyStackError, ApplyStackEvents, ApplyStackInput, ApplyStackOutput, Capability,
     Parameter, StackOutput, TemplateSource,
 };
-pub use error::{StackFailure, StackWarning};
 pub use event::{StackEvent, StackEventDetails};
+pub use stack::{StackFailure, StackWarning};
 pub use status::{
     ChangeSetStatus, InvalidStatus, ResourceStatus, StackStatus, Status, StatusSentiment,
 };
