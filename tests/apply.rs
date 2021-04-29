@@ -130,18 +130,21 @@ async fn create_stack_fut_err() -> Result<(), Box<dyn std::error::Error>> {
         assert_eq!(stack_status, StackStatus::RollbackComplete);
         assert!(stack_status_reason.contains("resource(s) failed to create: [Vpc]"));
         assert_eq!(
-            resource_events.get(0).map(|(status, details)| {
-                (
-                    details.logical_resource_id(),
-                    *status,
-                    details.resource_status_reason(),
-                )
-            }),
-            Some((
+            resource_events
+                .iter()
+                .map(|(status, details)| {
+                    (
+                        details.logical_resource_id(),
+                        *status,
+                        details.resource_status_reason(),
+                    )
+                })
+                .collect::<Vec<_>>(),
+            vec![(
                 "Vpc",
                 ResourceStatus::CreateFailed,
                 Some("Property CidrBlock cannot be empty.")
-            ))
+            )]
         );
     } else {
         return Err(error.into());
@@ -264,18 +267,21 @@ async fn update_stack_fut_err() -> Result<(), Box<dyn std::error::Error>> {
         assert_eq!(stack_status, StackStatus::UpdateRollbackComplete);
         assert!(stack_status_reason.contains("resource(s) failed to create: [Vpc]"));
         assert_eq!(
-            resource_events.get(0).map(|(status, details)| {
-                (
-                    details.logical_resource_id(),
-                    *status,
-                    details.resource_status_reason(),
-                )
-            }),
-            Some((
+            resource_events
+                .iter()
+                .map(|(status, details)| {
+                    (
+                        details.logical_resource_id(),
+                        *status,
+                        details.resource_status_reason(),
+                    )
+                })
+                .collect::<Vec<_>>(),
+            vec![(
                 "Vpc",
                 ResourceStatus::CreateFailed,
                 Some("Property CidrBlock cannot be empty.")
-            ))
+            )]
         );
     } else {
         return Err(error.into());
