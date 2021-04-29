@@ -59,9 +59,7 @@ pub struct ApplyStackInput {
     /// requests to ensure that AWS CloudFormation successfully received them.
     ///
     /// All events triggered by a given stack operation are assigned the same client request token,
-    /// which are used to track operations. If you do not specify a specific client request token,
-    /// one will be generated in order to accurately correlate events with the performed stack
-    /// operations.
+    /// which are used to track operations.
     pub client_request_token: Option<String>,
 
     /// The Simple Notification Service (SNS) topic ARNs to publish stack related events.
@@ -597,13 +595,9 @@ pub struct ApplyStack<'client> {
 impl<'client> ApplyStack<'client> {
     pub(crate) fn new<Client: CloudFormation>(
         client: &'client Client,
-        mut input: ApplyStackInput,
+        input: ApplyStackInput,
     ) -> Self {
         let event_stream = try_stream! {
-            input
-                .client_request_token
-                .get_or_insert_with(|| format!("apply-stack-{}", Utc::now().timestamp_millis()));
-
             let change_set = match create_change_set_internal(client, input).await? {
                 Ok(change_set) => change_set,
                 Err(change_set) => {
