@@ -583,8 +583,8 @@ impl std::error::Error for ApplyStackError {
 
 /// An ongoing `apply_stack` operation.
 ///
-/// This implements both `Future` and `Stream`, depending on whether or not it's desired to react to
-/// stack progress or simply wait for the operation to conclude.
+/// This implements `Future`, which will simply wait for the operation to conclude. If you want to
+/// observe progress, see [`ApplyStack::events`].
 pub struct ApplyStack<'client> {
     event_stream: Pin<Box<dyn Stream<Item = Result<ApplyStackEvent, ApplyStackError>> + 'client>>,
 

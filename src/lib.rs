@@ -30,10 +30,9 @@ pub trait CloudFormatious: CloudFormation + Sized + private::Sealed {
     /// This is similar to the `aws cloudformation deploy` command from the AWS CLI (with
     /// `--no-fail-on-empty-changeset` always on).
     ///
-    /// The return value implements both `Future` and `Stream`. The `Future` implementation can be
-    /// used to simply wait for the operation to complete, or the `Stream` implementation can be
-    /// used to react to stack events that occur during the operation. See the [`Apply`] struct for
-    /// more details.
+    /// The returned `Future` can be used to simply wait for the operation to complete. You can also
+    /// use [`ApplyStack::events`] to get a `Stream` of the stack events that occur during the
+    /// operation. See [`ApplyStack`] for more details.
     fn apply_stack(&self, input: ApplyStackInput) -> ApplyStack {
         ApplyStack::new(self, input)
     }
