@@ -707,6 +707,27 @@ impl<'client> Apply<'client> {
             output: None,
         }
     }
+
+    /// Get a `Stream` of `StackEvent`s.
+    pub fn events(&mut self) -> ApplyEvents<'client, '_> {
+        ApplyEvents(self)
+    }
+
+    fn poll_next_internal(&mut self, ctx: &mut task::Context) -> task::Poll<Option<StackEvent>> {
+        match self.event_stream.as_mut().poll_next(ctx) {
+            task::Poll::Pending => task::Poll::Pending,
+            task::Poll::Ready(None) => task::Poll::Ready(None),
+            task::Poll::Ready(Some(Ok(ApplyEvent::Event(event)))) => task::Poll::Ready(Some(event)),
+            task::Poll::Ready(Some(Ok(ApplyEvent::Output(output)))) => {
+                self.output.replace(Ok(output));
+                task::Poll::Ready(None)
+            }
+            task::Poll::Ready(Some(Err(error))) => {
+                self.output.replace(Err(error));
+                task::Poll::Ready(None)
+            }
+        }
+    }
 }
 
 impl Future for Apply<'_> {
@@ -714,7 +735,7 @@ impl Future for Apply<'_> {
 
     fn poll(mut self: Pin<&mut Self>, ctx: &mut task::Context) -> task::Poll<Self::Output> {
         loop {
-            match self.as_mut().poll_next(ctx) {
+            match self.poll_next_internal(ctx) {
                 task::Poll::Pending => return task::Poll::Pending,
                 task::Poll::Ready(None) => {
                     return task::Poll::Ready(
@@ -729,26 +750,18 @@ impl Future for Apply<'_> {
     }
 }
 
-impl Stream for Apply<'_> {
+/// Return value of [`Apply::events`].
+#[allow(clippy::module_name_repetitions)]
+pub struct ApplyEvents<'client, 'apply>(&'apply mut Apply<'client>);
+
+impl Stream for ApplyEvents<'_, '_> {
     type Item = StackEvent;
 
     fn poll_next(
         mut self: Pin<&mut Self>,
         ctx: &mut task::Context,
     ) -> task::Poll<Option<Self::Item>> {
-        match self.event_stream.as_mut().poll_next(ctx) {
-            task::Poll::Pending => task::Poll::Pending,
-            task::Poll::Ready(None) => task::Poll::Ready(None),
-            task::Poll::Ready(Some(Ok(ApplyEvent::Event(event)))) => task::Poll::Ready(Some(event)),
-            task::Poll::Ready(Some(Ok(ApplyEvent::Output(output)))) => {
-                self.output.replace(Ok(output));
-                task::Poll::Ready(None)
-            }
-            task::Poll::Ready(Some(Err(error))) => {
-                self.output.replace(Err(error));
-                task::Poll::Ready(None)
-            }
-        }
+        self.0.poll_next_internal(ctx)
     }
 }
 

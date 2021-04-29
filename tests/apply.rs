@@ -60,7 +60,8 @@ async fn create_stack_stream_ok() -> Result<(), Box<dyn std::error::Error>> {
     let input = ApplyInput::new(&stack_name, TemplateSource::inline(DUMMY_TEMPLATE));
     let mut apply = client.apply(input);
 
-    let events: Vec<_> = (&mut apply)
+    let events: Vec<_> = apply
+        .events()
         .map(|event| {
             (
                 event.logical_resource_id().to_string(),
@@ -169,7 +170,8 @@ async fn create_stack_stream_err() -> Result<(), Box<dyn std::error::Error>> {
     let input = ApplyInput::new(&stack_name, TemplateSource::inline(FAILING_TEMPLATE));
     let mut apply = client.apply(input);
 
-    let events: Vec<_> = (&mut apply)
+    let events: Vec<_> = apply
+        .events()
         .map(|event| {
             (
                 event.logical_resource_id().to_string(),

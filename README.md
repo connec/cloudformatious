@@ -21,7 +21,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let input = ApplyInput::new("my-stack", TemplateSource::inline("{}"));
     let mut apply = client.apply(input);
 
-    while let Some(event) = apply.next().await {
+    let mut events = apply.events();
+    while let Some(event) = events.next().await {
         eprintln!("{:#?}", event);
     };
 
