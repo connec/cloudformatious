@@ -11,12 +11,10 @@ use rusoto_cloudformation::{
 use rusoto_core::RusotoError;
 use serde_plain::forward_display_to_serde;
 
-use crate::change_set::{
-    create_change_set, execute_change_set, ChangeSet, CreateChangeSetError, ExecuteChangeSetError,
-};
 use crate::{
-    ChangeSetStatus, ResourceStatus, StackEvent, StackEventDetails, StackFailure, StackStatus,
-    StackWarning, Status,
+    change_set::{create_change_set, execute_change_set, ChangeSet, CreateChangeSetError},
+    stack::StackOperationError,
+    ChangeSetStatus, StackEvent, StackFailure, StackStatus, StackWarning,
 };
 
 /// The input for the `apply_stack` operation.
@@ -612,17 +610,39 @@ impl<'client> ApplyStack<'client> {
                     let output = describe_output(client, change_set.stack_id).await?;
                     yield ApplyStackEvent::Output(output);
                     return;
-                },
+                }
             };
             let stack_id = change_set.stack_id.clone();
 
-            let mut execution = ExecuteChangeSet::new(client, stack_id, change_set);
-            while let Some(event) = execution.try_next().await? {
+            let mut operation = execute_change_set(client, change_set)
+                .await
+                .map_err(ApplyStackError::from_rusoto_error)?;
+            while let Some(event) = operation
+                .try_next()
+                .await
+                .map_err(ApplyStackError::from_rusoto_error)?
+            {
                 yield ApplyStackEvent::Event(event);
             }
 
-            let output = execution.try_into_output().await?;
-            yield ApplyStackEvent::Output(output);
+            let warning = match operation.verify().await {
+                Err(StackOperationError::Failure(failure)) => {
+                    Err(ApplyStackError::Failure(failure))?;
+                    unreachable!()
+                }
+                Ok(_) => None,
+                Err(StackOperationError::Warning(warning)) => Some(warning),
+            };
+
+            let output = describe_output(client, stack_id).await?;
+
+            match warning {
+                Some(warning) => {
+                    Err(ApplyStackError::Warning { output, warning })?;
+                    unreachable!()
+                }
+                None => yield ApplyStackEvent::Output(output),
+            };
         };
         Self {
             event_stream: Box::pin(event_stream),
@@ -717,120 +737,6 @@ async fn create_change_set_internal<Client: CloudFormation>(
                 .status_reason
                 .expect("ChangeSet failed without reason"),
         }),
-    }
-}
-
-/// A stream that tracks useful error info.
-struct ExecuteChangeSet<'client, Client> {
-    client: &'client Client,
-    stack_id: String,
-    events: Pin<Box<dyn Stream<Item = Result<StackEvent, ExecuteChangeSetError>> + 'client>>,
-    stack_error_status: Option<StackStatus>,
-    stack_error_status_reason: Option<String>,
-    resource_error_events: Vec<(ResourceStatus, StackEventDetails)>,
-}
-
-impl<'client, Client> ExecuteChangeSet<'client, Client>
-where
-    Client: CloudFormation,
-{
-    fn new(client: &'client Client, stack_id: String, change_set: ChangeSet) -> Self {
-        ExecuteChangeSet {
-            client,
-            stack_id,
-            events: Box::pin(execute_change_set(client, change_set)),
-            stack_error_status: None,
-            stack_error_status_reason: None,
-            resource_error_events: Vec::new(),
-        }
-    }
-
-    fn process_event(
-        &mut self,
-        event: Result<StackEvent, ExecuteChangeSetError>,
-    ) -> Result<StackEvent, ApplyStackError> {
-        let event = event.or_else(|error| match error {
-            ExecuteChangeSetError::ExecuteApi(error) => {
-                Err(ApplyStackError::from_rusoto_error(error))
-            }
-            ExecuteChangeSetError::PollApi(error) => Err(ApplyStackError::from_rusoto_error(error)),
-            ExecuteChangeSetError::Failed { status, event } => {
-                self.stack_error_status = Some(status);
-                Ok(event)
-            }
-        })?;
-
-        match &event {
-            StackEvent::Stack {
-                resource_status, ..
-            } => {
-                if resource_status.sentiment().is_negative() {
-                    if let Some(reason) = event.resource_status_reason() {
-                        self.stack_error_status_reason.replace(reason.to_string());
-                    }
-                }
-            }
-            StackEvent::Resource {
-                resource_status,
-                details,
-            } => {
-                if resource_status.sentiment().is_negative() {
-                    self.resource_error_events
-                        .push((*resource_status, details.clone()));
-                }
-            }
-        }
-
-        Ok(event)
-    }
-
-    async fn try_into_output(self) -> Result<ApplyStackOutput, ApplyStackError> {
-        if let Some(stack_status) = self.stack_error_status {
-            return Err(ApplyStackError::Failure(StackFailure {
-                stack_id: self.stack_id,
-                stack_status,
-                stack_status_reason: self
-                    .stack_error_status_reason
-                    .expect("stack op failed with no reasons"),
-                resource_events: self.resource_error_events,
-            }));
-        }
-
-        let output = describe_output(self.client, self.stack_id).await?;
-
-        if self.resource_error_events.is_empty() {
-            Ok(output)
-        } else {
-            let stack_id = output.stack_id.clone();
-            Err(ApplyStackError::Warning {
-                output,
-                warning: StackWarning {
-                    stack_id,
-                    resource_events: self.resource_error_events,
-                },
-            })
-        }
-    }
-}
-
-impl<'client, Client> Stream for ExecuteChangeSet<'client, Client>
-where
-    Client: CloudFormation,
-{
-    type Item = Result<StackEvent, ApplyStackError>;
-
-    fn poll_next(
-        mut self: Pin<&mut Self>,
-        ctx: &mut task::Context<'_>,
-    ) -> task::Poll<Option<Self::Item>> {
-        match self.events.as_mut().poll_next(ctx) {
-            task::Poll::Pending => task::Poll::Pending,
-            task::Poll::Ready(None) => task::Poll::Ready(None),
-            task::Poll::Ready(Some(event)) => {
-                let event = self.process_event(event);
-                task::Poll::Ready(Some(event))
-            }
-        }
     }
 }
 

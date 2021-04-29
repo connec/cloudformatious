@@ -1,6 +1,14 @@
-use std::fmt;
+use std::{fmt, pin::Pin, task, time::Duration};
 
-use crate::{ResourceStatus, StackEventDetails, StackStatus};
+use async_stream::try_stream;
+use chrono::{DateTime, Utc};
+use futures_util::Stream;
+use rusoto_cloudformation::{CloudFormation, DescribeStackEventsError, DescribeStackEventsInput};
+use rusoto_core::RusotoError;
+
+use crate::{ResourceStatus, StackEvent, StackEventDetails, StackStatus, Status};
+
+const POLL_INTERVAL_STACK_EVENT: Duration = Duration::from_secs(5);
 
 /// Describes a failed stack operation.
 ///
@@ -75,7 +83,7 @@ pub struct StackWarning {
 
     /// Resource events with negative statuses that did not affect the overall operation.
     ///
-    /// **Note:** this is represented as a `Vec` or tuples to avoid having to worry about
+    /// **Note:** this is represented as a `Vec` of tuples to avoid having to worry about
     /// matching [`StackEvent`] variants (when it would be a logical error for them to be
     /// anything other than the `Resource` variant).
     pub resource_events: Vec<(ResourceStatus, StackEventDetails)>,
@@ -102,5 +110,159 @@ impl fmt::Display for StackWarning {
             )?;
         }
         Ok(())
+    }
+}
+
+pub(crate) enum StackOperationError {
+    Failure(StackFailure),
+    Warning(StackWarning),
+}
+
+pub(crate) enum StackOperationStatus {
+    InProgress,
+    Complete,
+    Failed,
+    Unexpected,
+}
+
+pub(crate) struct StackOperation<'client, F> {
+    stack_id: String,
+    check_progress: F,
+    events: Pin<
+        Box<dyn Stream<Item = Result<StackEvent, RusotoError<DescribeStackEventsError>>> + 'client>,
+    >,
+    stack_error_status: Option<StackStatus>,
+    stack_error_status_reason: Option<String>,
+    resource_error_events: Vec<(ResourceStatus, StackEventDetails)>,
+}
+
+impl<'client, F> StackOperation<'client, F>
+where
+    F: Fn(StackStatus) -> StackOperationStatus + Unpin,
+{
+    pub(crate) fn new<Client: CloudFormation>(
+        client: &'client Client,
+        stack_id: String,
+        started_at: DateTime<Utc>,
+        check_progress: F,
+    ) -> Self {
+        let describe_stack_events_input = DescribeStackEventsInput {
+            stack_name: Some(stack_id.clone()),
+            ..DescribeStackEventsInput::default()
+        };
+        let events = try_stream! {
+            let mut interval = tokio::time::interval(POLL_INTERVAL_STACK_EVENT);
+            let mut since = started_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+
+            loop {
+                interval.tick().await;
+
+                let stack_events: Vec<_> = client
+                    .describe_stack_events(describe_stack_events_input.clone())
+                    .await?
+                    .stack_events
+                    .expect("DescribeStackEventsOutput without stack_events")
+                    .into_iter()
+                    .take_while(|event| event.timestamp > since)
+                    .map(StackEvent::from_raw)
+                    .collect();
+
+                if let Some(stack_event) = stack_events.first() {
+                    since = stack_event
+                        .timestamp()
+                        .to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+                }
+
+                for stack_event in stack_events.into_iter().rev() {
+                    let is_terminal = stack_event.is_terminal();
+
+                    yield stack_event;
+
+                    if is_terminal {
+                        return;
+                    }
+                }
+            }
+        };
+        Self {
+            stack_id,
+            check_progress,
+            events: Box::pin(events),
+            stack_error_status: None,
+            stack_error_status_reason: None,
+            resource_error_events: Vec::new(),
+        }
+    }
+
+    pub(crate) async fn verify(self) -> Result<(), StackOperationError> {
+        if let Some(stack_status) = self.stack_error_status {
+            return Err(StackOperationError::Failure(StackFailure {
+                stack_id: self.stack_id,
+                stack_status,
+                stack_status_reason: self
+                    .stack_error_status_reason
+                    .expect("stack op failed with no reasons"),
+                resource_events: self.resource_error_events,
+            }));
+        }
+
+        if self.resource_error_events.is_empty() {
+            Ok(())
+        } else {
+            Err(StackOperationError::Warning(StackWarning {
+                stack_id: self.stack_id,
+                resource_events: self.resource_error_events,
+            }))
+        }
+    }
+}
+
+impl<F> Stream for StackOperation<'_, F>
+where
+    F: Fn(StackStatus) -> StackOperationStatus + Unpin,
+{
+    type Item = Result<StackEvent, RusotoError<DescribeStackEventsError>>;
+
+    fn poll_next(
+        mut self: Pin<&mut Self>,
+        ctx: &mut task::Context<'_>,
+    ) -> task::Poll<Option<Self::Item>> {
+        match self.events.as_mut().poll_next(ctx) {
+            task::Poll::Pending => task::Poll::Pending,
+            task::Poll::Ready(None) => task::Poll::Ready(None),
+            task::Poll::Ready(Some(Err(error))) => task::Poll::Ready(Some(Err(error))),
+            task::Poll::Ready(Some(Ok(event))) => {
+                match &event {
+                    StackEvent::Resource {
+                        resource_status,
+                        details,
+                    } => {
+                        if resource_status.sentiment().is_negative() {
+                            self.resource_error_events
+                                .push((*resource_status, details.clone()));
+                        }
+                    }
+                    StackEvent::Stack {
+                        resource_status, ..
+                    } => {
+                        if resource_status.sentiment().is_negative() {
+                            if let Some(reason) = event.resource_status_reason() {
+                                self.stack_error_status_reason.replace(reason.to_string());
+                            }
+                        }
+                        match (self.check_progress)(*resource_status) {
+                            StackOperationStatus::InProgress | StackOperationStatus::Complete => {}
+                            StackOperationStatus::Failed => {
+                                self.stack_error_status = Some(*resource_status);
+                            }
+                            StackOperationStatus::Unexpected => {
+                                panic!("stack has unexpected status for: {}", resource_status);
+                            }
+                        }
+                    }
+                }
+                task::Poll::Ready(Some(Ok(event)))
+            }
+        }
     }
 }

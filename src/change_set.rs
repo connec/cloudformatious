@@ -2,26 +2,22 @@
 
 use std::{fmt, time::Duration};
 
-use async_stream::try_stream;
 use chrono::Utc;
-use futures_util::Stream;
 use futures_util::TryFutureExt;
 use memmem::{Searcher, TwoWaySearcher};
 use rusoto_cloudformation::{
     CloudFormation, CreateChangeSetInput, DescribeChangeSetError, DescribeChangeSetInput,
-    DescribeChangeSetOutput, DescribeStackEventsError, DescribeStackEventsInput,
-    ExecuteChangeSetInput,
+    DescribeChangeSetOutput, ExecuteChangeSetError, ExecuteChangeSetInput,
 };
 use rusoto_core::{request::BufferedHttpResponse, RusotoError};
 use tokio::time::{interval_at, Instant};
 
 use crate::{
-    event::StackEvent,
+    stack::{StackOperation, StackOperationStatus},
     status::{ChangeSetStatus, StackStatus},
 };
 
 const POLL_INTERVAL_CHANGE_SET: Duration = Duration::from_secs(1);
-const POLL_INTERVAL_STACK_EVENT: Duration = Duration::from_secs(5);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ChangeSetType {
@@ -155,108 +151,29 @@ pub(crate) async fn create_change_set<Client: CloudFormation>(
     }
 }
 
-pub(crate) enum ExecuteChangeSetError {
-    ExecuteApi(RusotoError<rusoto_cloudformation::ExecuteChangeSetError>),
-    PollApi(RusotoError<DescribeStackEventsError>),
-    Failed {
-        // Separate status from event to avoid having to match
-        status: StackStatus,
-        event: StackEvent,
-    },
-}
-
-impl From<RusotoError<rusoto_cloudformation::ExecuteChangeSetError>> for ExecuteChangeSetError {
-    fn from(error: RusotoError<rusoto_cloudformation::ExecuteChangeSetError>) -> Self {
-        Self::ExecuteApi(error)
-    }
-}
-
-impl From<RusotoError<DescribeStackEventsError>> for ExecuteChangeSetError {
-    fn from(error: RusotoError<DescribeStackEventsError>) -> Self {
-        Self::PollApi(error)
-    }
-}
-
-/// Private enum to simplify stack event handling in [`execute_change_set`].
-enum ExecuteStatus {
-    InProgress,
-    Complete,
-    Failed,
-    Unexpected,
-}
-
-pub(crate) fn execute_change_set<Client: CloudFormation>(
+pub(crate) async fn execute_change_set<Client: CloudFormation>(
     client: &Client,
     change_set: ChangeSet,
-) -> impl Stream<Item = Result<StackEvent, ExecuteChangeSetError>> + '_ {
-    try_stream! {
-        let mut since = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
-        let input = ExecuteChangeSetInput {
-            change_set_name: change_set.id,
-            ..ExecuteChangeSetInput::default()
-        };
-        client.execute_change_set(input).await?;
+) -> Result<
+    StackOperation<'_, impl Fn(StackStatus) -> StackOperationStatus + Unpin>,
+    RusotoError<ExecuteChangeSetError>,
+> {
+    let started_at = Utc::now();
+    let input = ExecuteChangeSetInput {
+        change_set_name: change_set.id,
+        ..ExecuteChangeSetInput::default()
+    };
+    client.execute_change_set(input).await?;
 
-        let mut interval = tokio::time::interval(POLL_INTERVAL_STACK_EVENT);
-        let describe_stack_events_input = DescribeStackEventsInput {
-            stack_name: Some(change_set.stack_id),
-            ..DescribeStackEventsInput::default()
-        };
-
-        let change_set_type = change_set.r#type;
-        loop {
-            interval.tick().await;
-
-            let stack_events: Vec<_> = client
-                .describe_stack_events(describe_stack_events_input.clone())
-                .await?
-                .stack_events
-                .expect("DescribeStackEventsOutput without stack_events")
-                .into_iter()
-                .take_while(|event| event.timestamp > since)
-                .map(StackEvent::from_raw)
-                .collect();
-
-            if let Some(stack_event) = stack_events.first() {
-                since = stack_event
-                    .timestamp()
-                    .to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
-            }
-
-            for stack_event in stack_events.into_iter().rev() {
-                match &stack_event {
-                    StackEvent::Resource { .. } => yield stack_event,
-                    StackEvent::Stack {
-                        resource_status, ..
-                    } => match get_execute_status(change_set_type, *resource_status) {
-                        ExecuteStatus::InProgress => yield stack_event,
-                        ExecuteStatus::Complete => {
-                            yield stack_event;
-                            return;
-                        }
-                        ExecuteStatus::Failed => {
-                            Err(ExecuteChangeSetError::Failed {
-                                status: *resource_status,
-                                event: stack_event,
-                            })?;
-                            unreachable!()
-                        }
-                        ExecuteStatus::Unexpected => {
-                            panic!(
-                                "stack {} has unexpected status for {}: {}",
-                                describe_stack_events_input
-                                    .stack_name
-                                    .as_deref()
-                                    .unwrap_or(""),
-                                change_set_type,
-                                resource_status
-                            );
-                        }
-                    },
-                }
-            }
-        }
-    }
+    Ok(StackOperation::new(
+        client,
+        change_set.stack_id,
+        started_at,
+        match change_set.r#type {
+            ChangeSetType::Create => check_create_progress,
+            ChangeSetType::Update => check_update_progress,
+        },
+    ))
 }
 
 fn is_already_exists(response: &BufferedHttpResponse) -> bool {
@@ -271,28 +188,29 @@ fn is_no_changes(status_reason: Option<&str>) -> bool {
         .contains("The submitted information didn't contain changes.")
 }
 
-fn get_execute_status(change_set_type: ChangeSetType, stack_status: StackStatus) -> ExecuteStatus {
-    match change_set_type {
-        ChangeSetType::Create => match stack_status {
-            StackStatus::CreateInProgress | StackStatus::RollbackInProgress => {
-                ExecuteStatus::InProgress
-            }
-            StackStatus::CreateComplete => ExecuteStatus::Complete,
-            StackStatus::CreateFailed
-            | StackStatus::RollbackFailed
-            | StackStatus::RollbackComplete => ExecuteStatus::Failed,
-            _ => ExecuteStatus::Unexpected,
-        },
-        ChangeSetType::Update => match stack_status {
-            StackStatus::UpdateInProgress
-            | StackStatus::UpdateCompleteCleanupInProgress
-            | StackStatus::UpdateRollbackInProgress
-            | StackStatus::UpdateRollbackCompleteCleanupInProgress => ExecuteStatus::InProgress,
-            StackStatus::UpdateComplete => ExecuteStatus::Complete,
-            StackStatus::UpdateRollbackFailed | StackStatus::UpdateRollbackComplete => {
-                ExecuteStatus::Failed
-            }
-            _ => ExecuteStatus::Unexpected,
-        },
+fn check_create_progress(stack_status: StackStatus) -> StackOperationStatus {
+    match stack_status {
+        StackStatus::CreateInProgress | StackStatus::RollbackInProgress => {
+            StackOperationStatus::InProgress
+        }
+        StackStatus::CreateComplete => StackOperationStatus::Complete,
+        StackStatus::CreateFailed | StackStatus::RollbackFailed | StackStatus::RollbackComplete => {
+            StackOperationStatus::Failed
+        }
+        _ => StackOperationStatus::Unexpected,
+    }
+}
+
+fn check_update_progress(stack_status: StackStatus) -> StackOperationStatus {
+    match stack_status {
+        StackStatus::UpdateInProgress
+        | StackStatus::UpdateCompleteCleanupInProgress
+        | StackStatus::UpdateRollbackInProgress
+        | StackStatus::UpdateRollbackCompleteCleanupInProgress => StackOperationStatus::InProgress,
+        StackStatus::UpdateComplete => StackOperationStatus::Complete,
+        StackStatus::UpdateRollbackFailed | StackStatus::UpdateRollbackComplete => {
+            StackOperationStatus::Failed
+        }
+        _ => StackOperationStatus::Unexpected,
     }
 }
