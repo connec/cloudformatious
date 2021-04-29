@@ -8,11 +8,11 @@
 An extension trait for [`rusoto_cloudformation::CloudFormationClient`](https://docs.rs/rusoto_cloudformation/0.46.0/rusoto_cloudformation/struct.CloudFormationClient.html) offering richly typed higher-level APIs to perform long-running operations and await their termination or observe their progress.
 
 ```rust + no_run
-use futures_util::TryStreamExt;
+use futures_util::StreamExt;
 use rusoto_cloudformation::CloudFormationClient;
 use rusoto_core::Region;
 
-use cloudformatious::{ApplyEvent, ApplyInput, CloudFormatious, TemplateSource};
+use cloudformatious::{ApplyInput, CloudFormatious, TemplateSource};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -20,17 +20,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let input = ApplyInput::new("my-stack", TemplateSource::inline("{}"));
     let mut apply = client.apply(input);
-    let mut output = None; // A cleaner way of getting the output is also on the list...
 
-    while let Some(event) = apply.try_next().await? {
-        match event {
-            ApplyEvent::Event(event) => eprintln!("{:#?}", event),
-            ApplyEvent::Output(output_) => output = Some(output_),
-        }
+    while let Some(event) = apply.next().await {
+        eprintln!("{:#?}", event);
     };
 
+    let output = apply.await?;
     eprintln!("Apply success!");
-    println!("{:#?}", output.unwrap());
+    println!("{:#?}", output);
 
     Ok(())
 }

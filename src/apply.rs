@@ -472,17 +472,6 @@ pub struct StackOutput {
     pub value: String,
 }
 
-/// Events emitted by an `apply` operation.
-#[derive(Debug, PartialEq)]
-#[allow(clippy::module_name_repetitions)]
-pub enum ApplyEvent {
-    /// A stack event emitted by CloudFormation during the `apply` operation.
-    Event(StackEvent),
-
-    /// The output of the `apply` operation (meaning it has concluded successfully).
-    Output(ApplyOutput),
-}
-
 /// Errors emitted by an `apply` operation.
 #[derive(Debug)]
 #[allow(clippy::module_name_repetitions)]
@@ -682,7 +671,7 @@ pub struct Apply<'client> {
     event_stream: Pin<Box<dyn Stream<Item = Result<ApplyEvent, ApplyError>> + 'client>>,
 
     // The `ApplyOutput` is moved here once it's been emitted by the stream.
-    output: Option<ApplyOutput>,
+    output: Option<Result<ApplyOutput, ApplyError>>,
 }
 
 impl Future for Apply<'_> {
@@ -690,33 +679,41 @@ impl Future for Apply<'_> {
 
     fn poll(mut self: Pin<&mut Self>, ctx: &mut task::Context) -> task::Poll<Self::Output> {
         loop {
-            match self.event_stream.as_mut().poll_next(ctx) {
+            match self.as_mut().poll_next(ctx) {
                 task::Poll::Pending => return task::Poll::Pending,
-                task::Poll::Ready(Some(Err(error))) => return task::Poll::Ready(Err(error)),
-                task::Poll::Ready(Some(Ok(ApplyEvent::Event(_)))) => continue,
-                task::Poll::Ready(Some(Ok(ApplyEvent::Output(output)))) => {
-                    self.output.replace(output);
-                    continue;
-                }
                 task::Poll::Ready(None) => {
-                    return task::Poll::Ready(Ok(self
-                        .output
-                        .take()
-                        .expect("end of stream without output")))
+                    return task::Poll::Ready(
+                        self.output
+                            .take()
+                            .expect("end of stream without err or output"),
+                    )
                 }
+                task::Poll::Ready(Some(_)) => continue,
             }
         }
     }
 }
 
 impl Stream for Apply<'_> {
-    type Item = Result<ApplyEvent, ApplyError>;
+    type Item = StackEvent;
 
     fn poll_next(
         mut self: Pin<&mut Self>,
         ctx: &mut task::Context,
     ) -> task::Poll<Option<Self::Item>> {
-        self.event_stream.as_mut().poll_next(ctx)
+        match self.event_stream.as_mut().poll_next(ctx) {
+            task::Poll::Pending => task::Poll::Pending,
+            task::Poll::Ready(None) => task::Poll::Ready(None),
+            task::Poll::Ready(Some(Ok(ApplyEvent::Event(event)))) => task::Poll::Ready(Some(event)),
+            task::Poll::Ready(Some(Ok(ApplyEvent::Output(output)))) => {
+                self.output.replace(Ok(output));
+                task::Poll::Ready(None)
+            }
+            task::Poll::Ready(Some(Err(error))) => {
+                self.output.replace(Err(error));
+                task::Poll::Ready(None)
+            }
+        }
     }
 }
 
@@ -753,6 +750,15 @@ impl<'client> Apply<'client> {
             output: None,
         }
     }
+}
+
+/// Events emitted by an `apply` operation internally.
+enum ApplyEvent {
+    /// A stack event emitted by CloudFormation during the `apply` operation.
+    Event(StackEvent),
+
+    /// The output of the `apply` operation (meaning it has concluded successfully).
+    Output(ApplyOutput),
 }
 
 async fn create_change_set_internal<Client: CloudFormation>(
