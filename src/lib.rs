@@ -2,6 +2,7 @@
 
 mod apply_stack;
 mod change_set;
+mod error;
 mod event;
 mod status;
 
@@ -11,6 +12,7 @@ pub use apply_stack::{
     ApplyStack, ApplyStackError, ApplyStackEvents, ApplyStackInput, ApplyStackOutput, Capability,
     Parameter, StackOutput, TemplateSource,
 };
+pub use error::{StackFailure, StackWarning};
 pub use event::{StackEvent, StackEventDetails};
 pub use status::{
     ChangeSetStatus, InvalidStatus, ResourceStatus, StackStatus, Status, StatusSentiment,

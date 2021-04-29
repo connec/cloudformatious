@@ -14,7 +14,10 @@ use serde_plain::forward_display_to_serde;
 use crate::change_set::{
     create_change_set, execute_change_set, ChangeSet, CreateChangeSetError, ExecuteChangeSetError,
 };
-use crate::{ChangeSetStatus, ResourceStatus, StackEvent, StackEventDetails, StackStatus, Status};
+use crate::{
+    ChangeSetStatus, ResourceStatus, StackEvent, StackEventDetails, StackFailure, StackStatus,
+    StackWarning, Status,
+};
 
 /// The input for the `apply_stack` operation.
 ///
@@ -503,32 +506,7 @@ pub enum ApplyStackError {
     },
 
     /// The apply stack operation failed.
-    ///
-    /// This error tries to capture enough information to quickly identify the root-cause of the
-    /// operation's failure (such as not having permission to create or update a particular resource
-    /// in the stack).
-    Failure {
-        /// The ID of the stack.
-        stack_id: String,
-
-        /// The failed status in which the stack settled.
-        stack_status: StackStatus,
-
-        /// The *first* reason the stack moved into a failing state.
-        ///
-        /// Note that this is not the reason associated with the current `stack_status`, but rather
-        /// the reason for the first negative status the stack entered (which is usually more
-        /// descriptive).
-        stack_status_reason: String,
-
-        /// Resource events with negative statuses that may have precipitated the failure of the
-        /// operation.
-        ///
-        /// **Note:** this is represented as a `Vec` or tuples to avoid having to worry about
-        /// matching [`StackEvent`] variants (when it would be a logical error for them to be
-        /// anything other than the `Resource` variant).
-        resource_events: Vec<(ResourceStatus, StackEventDetails)>,
-    },
+    Failure(StackFailure),
 
     /// The apply stack operation succeeded with warnings.
     ///
@@ -542,18 +520,19 @@ pub enum ApplyStackError {
     /// simply map this variant away:
     ///
     /// ```no_run
-    /// # use cloudformatious::{ApplyStackError, ApplyStackOutput};
-    /// # fn main() -> Result<(), ApplyStackError> {
-    /// # let output = todo!();
-    /// # let resource_events = Vec::new();
-    /// let result = Err(ApplyStackError::Warning { output, resource_events });
-    /// result.or_else(|error| {
-    ///     if let ApplyStackError::Warning { output, .. } = error {
-    ///         Ok(output)
-    ///     } else {
-    ///         Err(error)
-    ///     }
-    /// })?;
+    /// # use rusoto_cloudformation::CloudFormationClient;
+    /// # use cloudformatious::{ApplyStackError, CloudFormatious};
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<(), ApplyStackError> {
+    /// # let client: CloudFormationClient = todo!();
+    /// # let input = todo!();
+    /// let output = client
+    ///     .apply_stack(input)
+    ///     .await
+    ///     .or_else(|error| match error {
+    ///         ApplyStackError::Warning { output, .. } => Ok(output),
+    ///         error => Err(error),
+    ///     })?;
     /// # Ok(())
     /// # }
     /// ```
@@ -561,12 +540,8 @@ pub enum ApplyStackError {
         /// The operation output.
         output: ApplyStackOutput,
 
-        /// Resource events with negative statuses that did not affect the overall operation.
-        ///
-        /// **Note:** this is represented as a `Vec` or tuples to avoid having to worry about
-        /// matching [`StackEvent`] variants (when it would be a logical error for them to be
-        /// anything other than the `Resource` variant).
-        resource_events: Vec<(ResourceStatus, StackEventDetails)>,
+        /// Details of what went wrong.
+        warning: StackWarning,
     },
 }
 
@@ -593,61 +568,8 @@ impl fmt::Display for ApplyStackError {
                     id, status, status_reason
                 )
             }
-            Self::Failure {
-                stack_id,
-                stack_status,
-                stack_status_reason,
-                resource_events,
-            } => {
-                write!(
-                    f,
-                    "Stack {} failed to apply; terminal status: {} ({})",
-                    stack_id, stack_status, stack_status_reason
-                )?;
-
-                if !resource_events.is_empty() {
-                    writeln!(f, "\nThe following resources had errors:")?;
-                }
-                for (resource_status, details) in resource_events {
-                    write!(
-                        f,
-                        "\n- {} ({}): {} ({})",
-                        details.logical_resource_id,
-                        details.resource_type,
-                        resource_status,
-                        details
-                            .resource_status_reason
-                            .as_deref()
-                            .unwrap_or("no reason reported"),
-                    )?;
-                }
-
-                Ok(())
-            }
-            Self::Warning {
-                output,
-                resource_events,
-            } => {
-                writeln!(
-                    f,
-                    "Stack {} applied successfully but some resources had errors:",
-                    output.stack_id
-                )?;
-                for (resource_status, details) in resource_events {
-                    write!(
-                        f,
-                        "\n- {} ({}): {} ({})",
-                        details.logical_resource_id,
-                        details.resource_type,
-                        resource_status,
-                        details
-                            .resource_status_reason
-                            .as_deref()
-                            .unwrap_or("no reason reported")
-                    )?;
-                }
-                Ok(())
-            }
+            Self::Failure(failure) => write!(f, "{}", failure),
+            Self::Warning { warning, .. } => write!(f, "{}", warning),
         }
     }
 }
@@ -864,14 +786,14 @@ where
 
     async fn try_into_output(self) -> Result<ApplyStackOutput, ApplyStackError> {
         if let Some(stack_status) = self.stack_error_status {
-            return Err(ApplyStackError::Failure {
+            return Err(ApplyStackError::Failure(StackFailure {
                 stack_id: self.stack_id,
                 stack_status,
                 stack_status_reason: self
                     .stack_error_status_reason
                     .expect("stack op failed with no reasons"),
                 resource_events: self.resource_error_events,
-            });
+            }));
         }
 
         let output = describe_output(self.client, self.stack_id).await?;
@@ -879,9 +801,13 @@ where
         if self.resource_error_events.is_empty() {
             Ok(output)
         } else {
+            let stack_id = output.stack_id.clone();
             Err(ApplyStackError::Warning {
                 output,
-                resource_events: self.resource_error_events,
+                warning: StackWarning {
+                    stack_id,
+                    resource_events: self.resource_error_events,
+                },
             })
         }
     }

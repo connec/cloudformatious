@@ -6,7 +6,8 @@ use rusoto_core::HttpClient;
 use rusoto_credential::{AutoRefreshingProvider, ChainProvider};
 
 use cloudformatious::{
-    ApplyStackError, ApplyStackInput, CloudFormatious, ResourceStatus, StackStatus, TemplateSource,
+    ApplyStackError, ApplyStackInput, CloudFormatious, ResourceStatus, StackFailure, StackStatus,
+    TemplateSource,
 };
 
 const NAME_PREFIX: &str = "rusoto-cloudformation-ext-testing-";
@@ -121,12 +122,12 @@ async fn create_stack_fut_err() -> Result<(), Box<dyn std::error::Error>> {
     let stack_name = generated_name();
     let input = ApplyStackInput::new(&stack_name, TemplateSource::inline(FAILING_TEMPLATE));
     let error = client.apply_stack(input).await.unwrap_err();
-    if let ApplyStackError::Failure {
+    if let ApplyStackError::Failure(StackFailure {
         stack_status,
         stack_status_reason,
         resource_events,
         ..
-    } = error
+    }) = error
     {
         assert_eq!(stack_status, StackStatus::RollbackComplete);
         assert!(stack_status_reason.contains("resource(s) failed to create: [Vpc]"));
@@ -192,12 +193,12 @@ async fn create_stack_stream_err() -> Result<(), Box<dyn std::error::Error>> {
             (stack_name.clone(), "ROLLBACK_COMPLETE".to_string()),
         ]
     );
-    if let ApplyStackError::Failure {
+    if let ApplyStackError::Failure(StackFailure {
         stack_status,
         stack_status_reason,
         resource_events,
         ..
-    } = error
+    }) = error
     {
         assert_eq!(stack_status, StackStatus::RollbackComplete);
         assert!(stack_status_reason.contains("resource(s) failed to create: [Vpc]"));
@@ -259,12 +260,12 @@ async fn update_stack_fut_err() -> Result<(), Box<dyn std::error::Error>> {
 
     let input = ApplyStackInput::new(&stack_name, TemplateSource::inline(FAILING_TEMPLATE));
     let error = client.apply_stack(input).await.unwrap_err();
-    if let ApplyStackError::Failure {
+    if let ApplyStackError::Failure(StackFailure {
         stack_status,
         stack_status_reason,
         resource_events,
         ..
-    } = error
+    }) = error
     {
         assert_eq!(stack_status, StackStatus::UpdateRollbackComplete);
         assert!(stack_status_reason.contains("resource(s) failed to create: [Vpc]"));
