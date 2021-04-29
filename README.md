@@ -12,7 +12,7 @@ use futures_util::StreamExt;
 use rusoto_cloudformation::CloudFormationClient;
 use rusoto_core::Region;
 
-use cloudformatious::{ApplyStackInput, CloudFormatious, TemplateSource};
+use cloudformatious::{ApplyStackInput, CloudFormatious, DeleteStackInput, TemplateSource};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -27,8 +27,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let output = stack.await?;
-    eprintln!("Apply success!");
+    eprintln!("Stack applied");
     println!("{:#?}", output);
+
+    let input = DeleteStackInput::new(output.stack_id);
+    client.delete_stack(input).await?;
+
+    println!("Stack deleted");
 
     Ok(())
 }

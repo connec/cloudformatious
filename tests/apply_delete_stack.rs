@@ -1,13 +1,13 @@
 use std::{env, time::Duration};
 
 use futures_util::StreamExt;
-use rusoto_cloudformation::{CloudFormation, CloudFormationClient, DeleteStackInput};
+use rusoto_cloudformation::{CloudFormationClient, DescribeStacksInput};
 use rusoto_core::HttpClient;
 use rusoto_credential::{AutoRefreshingProvider, ChainProvider};
 
 use cloudformatious::{
-    ApplyStackError, ApplyStackInput, CloudFormatious, ResourceStatus, StackFailure, StackStatus,
-    TemplateSource,
+    ApplyStackError, ApplyStackInput, CloudFormatious, DeleteStackInput, ResourceStatus,
+    StackFailure, StackStatus, TemplateSource,
 };
 
 const NAME_PREFIX: &str = "rusoto-cloudformation-ext-testing-";
@@ -19,6 +19,14 @@ const DUMMY_TEMPLATE: &str = r#"{
         "Fake": {
             "Type": "Custom::Fake",
             "Condition": Never
+        }
+    }
+}"#;
+const NON_EMPTY_TEMPLATE: &str = r#"{
+    "Resources": {
+        "Dummy": {
+            "Type": "AWS::CloudFormation::WaitConditionHandle",
+            "Properties": {}
         }
     }
 }"#;
@@ -42,13 +50,7 @@ async fn create_stack_fut_ok() -> Result<(), Box<dyn std::error::Error>> {
     let output = client.apply_stack(input).await?;
     assert_eq!(output.stack_status, StackStatus::CreateComplete);
 
-    // Clean-up
-    client
-        .delete_stack(DeleteStackInput {
-            stack_name,
-            ..DeleteStackInput::default()
-        })
-        .await?;
+    clean_up(&client, stack_name).await?;
 
     Ok(())
 }
@@ -82,19 +84,13 @@ async fn create_stack_stream_ok() -> Result<(), Box<dyn std::error::Error>> {
         ]
     );
 
-    // Clean-up
-    client
-        .delete_stack(DeleteStackInput {
-            stack_name,
-            ..DeleteStackInput::default()
-        })
-        .await?;
+    clean_up(&client, stack_name).await?;
 
     Ok(())
 }
 
 #[tokio::test]
-async fn idempotent() -> Result<(), Box<dyn std::error::Error>> {
+async fn apply_idempotent() -> Result<(), Box<dyn std::error::Error>> {
     let client = get_client();
 
     let stack_name = generated_name();
@@ -104,13 +100,7 @@ async fn idempotent() -> Result<(), Box<dyn std::error::Error>> {
     assert_eq!(output2.stack_status, StackStatus::CreateComplete);
     assert_eq!(output1, output2);
 
-    // Clean-up
-    client
-        .delete_stack(DeleteStackInput {
-            stack_name,
-            ..DeleteStackInput::default()
-        })
-        .await?;
+    clean_up(&client, stack_name).await?;
 
     Ok(())
 }
@@ -152,13 +142,7 @@ async fn create_stack_fut_err() -> Result<(), Box<dyn std::error::Error>> {
         return Err(error.into());
     }
 
-    // Clean-up
-    client
-        .delete_stack(DeleteStackInput {
-            stack_name,
-            ..DeleteStackInput::default()
-        })
-        .await?;
+    clean_up(&client, stack_name).await?;
 
     Ok(())
 }
@@ -223,13 +207,7 @@ async fn create_stack_stream_err() -> Result<(), Box<dyn std::error::Error>> {
         return Err(error.into());
     }
 
-    // Clean-up
-    client
-        .delete_stack(DeleteStackInput {
-            stack_name,
-            ..DeleteStackInput::default()
-        })
-        .await?;
+    clean_up(&client, stack_name).await?;
 
     Ok(())
 }
@@ -290,13 +268,135 @@ async fn update_stack_fut_err() -> Result<(), Box<dyn std::error::Error>> {
         return Err(error.into());
     }
 
-    // Clean-up
-    client
-        .delete_stack(DeleteStackInput {
-            stack_name,
-            ..DeleteStackInput::default()
+    clean_up(&client, stack_name).await?;
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn delete_stack_fut_ok() -> Result<(), Box<dyn std::error::Error>> {
+    let client = get_client();
+
+    let stack_name = generated_name();
+    let input = ApplyStackInput::new(&stack_name, TemplateSource::inline(DUMMY_TEMPLATE));
+    let stack = client.apply_stack(input).await?;
+
+    let input = DeleteStackInput::new(&stack_name);
+    client.delete_stack(input).await?;
+
+    let input = DescribeStacksInput {
+        stack_name: Some(stack.stack_id),
+        ..DescribeStacksInput::default()
+    };
+    let stack = {
+        use rusoto_cloudformation::CloudFormation;
+        client
+            .describe_stacks(input)
+            .await?
+            .stacks
+            .unwrap()
+            .pop()
+            .unwrap()
+    };
+
+    assert_eq!(stack.stack_status, "DELETE_COMPLETE");
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn delete_stack_stream_ok() -> Result<(), Box<dyn std::error::Error>> {
+    let client = get_client();
+
+    let stack_name = generated_name();
+    let input = ApplyStackInput::new(&stack_name, TemplateSource::inline(NON_EMPTY_TEMPLATE));
+    let stack = client.apply_stack(input).await?;
+
+    let input = DeleteStackInput::new(&stack_name);
+    let mut delete = client.delete_stack(input);
+
+    let events: Vec<_> = delete
+        .events()
+        .map(|event| {
+            (
+                event.logical_resource_id().to_string(),
+                event.resource_status().to_string(),
+            )
         })
-        .await?;
+        .collect()
+        .await;
+    delete.await?;
+
+    assert_eq!(
+        events,
+        vec![
+            (stack_name.clone(), "DELETE_IN_PROGRESS".to_string()),
+            ("Dummy".to_string(), "DELETE_IN_PROGRESS".to_string()),
+            ("Dummy".to_string(), "DELETE_COMPLETE".to_string()),
+            (stack_name.clone(), "DELETE_COMPLETE".to_string())
+        ]
+    );
+
+    let input = DescribeStacksInput {
+        stack_name: Some(stack.stack_id),
+        ..DescribeStacksInput::default()
+    };
+    let stack = {
+        use rusoto_cloudformation::CloudFormation;
+        client
+            .describe_stacks(input)
+            .await?
+            .stacks
+            .unwrap()
+            .pop()
+            .unwrap()
+    };
+
+    assert_eq!(stack.stack_status, "DELETE_COMPLETE");
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn delete_stack_fut_noop() -> Result<(), Box<dyn std::error::Error>> {
+    let client = get_client();
+
+    let stack_name = generated_name();
+    let input = DeleteStackInput::new(&stack_name);
+    client.delete_stack(input).await?;
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn delete_stack_stream_noop() -> Result<(), Box<dyn std::error::Error>> {
+    let client = get_client();
+
+    let stack_name = generated_name();
+    let input = DeleteStackInput::new(&stack_name);
+    let mut delete = client.delete_stack(input);
+
+    let events: Vec<_> = delete.events().collect().await;
+    delete.await?;
+
+    assert_eq!(events, vec![]);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn delete_stack_idempotent() -> Result<(), Box<dyn std::error::Error>> {
+    let client = get_client();
+
+    let stack_name = generated_name();
+    let input = ApplyStackInput::new(&stack_name, TemplateSource::inline(DUMMY_TEMPLATE));
+    let stack = client.apply_stack(input).await?;
+
+    let input = DeleteStackInput::new(&stack.stack_id);
+    client.delete_stack(input).await?;
+
+    let input = DeleteStackInput::new(&stack.stack_id);
+    client.delete_stack(input).await?;
 
     Ok(())
 }
@@ -315,4 +415,20 @@ fn get_client() -> CloudFormationClient {
 
 fn generated_name() -> String {
     format!("{}{}", NAME_PREFIX, fastrand::u32(..))
+}
+
+async fn clean_up(
+    client: &CloudFormationClient,
+    stack_name: String,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use rusoto_cloudformation::{CloudFormation, DeleteStackInput};
+    CloudFormation::delete_stack(
+        client,
+        DeleteStackInput {
+            stack_name,
+            ..DeleteStackInput::default()
+        },
+    )
+    .await
+    .map_err(Into::into)
 }

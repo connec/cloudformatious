@@ -2,6 +2,7 @@
 
 mod apply_stack;
 mod change_set;
+mod delete_stack;
 mod event;
 mod stack;
 mod status;
@@ -12,6 +13,7 @@ pub use apply_stack::{
     ApplyStack, ApplyStackError, ApplyStackEvents, ApplyStackInput, ApplyStackOutput, Capability,
     Parameter, StackOutput, TemplateSource,
 };
+pub use delete_stack::{DeleteStack, DeleteStackError, DeleteStackEvents, DeleteStackInput};
 pub use event::{StackEvent, StackEventDetails};
 pub use stack::{StackFailure, StackWarning};
 pub use status::{
@@ -34,6 +36,19 @@ pub trait CloudFormatious: CloudFormation + Sized + private::Sealed {
     /// more details.
     fn apply_stack(&self, input: ApplyStackInput) -> ApplyStack {
         ApplyStack::new(self, input)
+    }
+
+    /// Delete a CloudFormation stack from an AWS environment.
+    ///
+    /// This is an idempotent operation that will delete the indicated stack if it exists, or do
+    /// nothing if it does not.
+    ///
+    /// The returned `Future` will behave exactly like [`CloudFormation::delete_stack`], however
+    /// [`DeleteStack::events`] can be used to get a `Stream` of `StackEvent`s that occur during
+    /// deletion (the stream will be empty if the stack does not exist). See the [`DeleteStack`]
+    /// struct for more details.
+    fn delete_stack(&self, input: DeleteStackInput) -> DeleteStack {
+        DeleteStack::new(self, input)
     }
 }
 
