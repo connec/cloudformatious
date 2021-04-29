@@ -50,10 +50,24 @@ Also, I like CloudFormation and programming in Rust so this is fun for me ðŸ¤·â€
 
 ## Current status
 
-There is a `CloudFormatious` extension trait with an `apply_stack` method, which implements an idempotent 'update or create stack' operation.
-It's roughly equivalent to the [`aws cloudformation deploy`](https://docs.aws.amazon.com/cli/latest/reference/cloudformation/deploy/index.html) command, but with better programmatic access to inputs, events, and outputs.
+The `CloudFormatious` extension trait has the following methods:
 
-I will probably want a similar '`Future` or `Stream`' API for stack deletion, but I have no needs beyond that for my current use cases.
+- [`apply_stack`] which implements an idempotent 'update or create stack' operation.
+- [`delete_stack`] which implements an idempotent delete stack operation.
+
+[`apply_stack`]: https://docs.rs/cloudformatious/latest/cloudformatious/trait.CloudFormatious.html#method.apply_stack
+[`delete_stack`]: https://docs.rs/cloudformatious/latest/cloudformatious/trait.CloudFormatious.html#method.delete_stack
+
+In both cases, the API is a bit more ergonomic than `rusoto_cloudformation` and the API is richer.
+In particular:
+
+- The return value of both methods implements `Future`, which can be `await`ed to wait for the overall operation to end.
+- The return value of both methods has an `events()` method, which can be used to get `Stream` of stack events that occur during the operation.
+- Both methods return rich `Err` values if the stack settles in a failing state.
+- Both methods return rich `Err` values if the stack operation succeeds, but some resource(s) had errors (these "warnings" can be ignored, but it may mean leaving extraneous infrastructure in your environment).
+- `apply_stack` returns a rich `Ok` value with 'cleaner' types than the generated `rusoto_cloudformation` types.
+
+This is enough for my current use-cases.
 
 ## Contributing
 
