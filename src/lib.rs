@@ -8,7 +8,8 @@ mod status;
 use rusoto_cloudformation::{CloudFormation, CloudFormationClient};
 
 pub use apply::{
-    Apply, ApplyError, ApplyInput, ApplyOutput, Capability, Parameter, StackOutput, TemplateSource,
+    Apply, ApplyError, ApplyEvents, ApplyInput, ApplyOutput, Capability, Parameter, StackOutput,
+    TemplateSource,
 };
 pub use event::{StackEvent, StackEventDetails};
 pub use status::{
