@@ -1,11 +1,12 @@
 #![warn(clippy::pedantic)]
 
 mod apply_stack;
-mod change_set;
 mod delete_stack;
 mod event;
 mod stack;
 mod status;
+
+pub mod change_set;
 
 use rusoto_cloudformation::{CloudFormation, CloudFormationClient};
 

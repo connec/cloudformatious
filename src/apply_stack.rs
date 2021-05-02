@@ -12,7 +12,7 @@ use rusoto_core::RusotoError;
 use serde_plain::{forward_display_to_serde, forward_from_str_to_serde};
 
 use crate::{
-    change_set::{create_change_set, execute_change_set, ChangeSet, CreateChangeSetError},
+    change_set::{create_change_set, execute_change_set, ChangeSetWithType, CreateChangeSetError},
     stack::StackOperationError,
     ChangeSetStatus, StackEvent, StackFailure, StackStatus, StackWarning,
 };
@@ -601,13 +601,13 @@ impl<'client> ApplyStack<'client> {
         let event_stream = try_stream! {
             let change_set = match create_change_set_internal(client, input).await? {
                 Ok(change_set) => change_set,
-                Err(change_set) => {
+                Err(ChangeSetWithType { change_set, .. }) => {
                     let output = describe_output(client, change_set.stack_id).await?;
                     yield ApplyStackEvent::Output(output);
                     return;
                 }
             };
-            let stack_id = change_set.stack_id.clone();
+            let stack_id = change_set.change_set.stack_id.clone();
 
             let mut operation = execute_change_set(client, change_set)
                 .await
@@ -716,7 +716,7 @@ enum ApplyStackEvent {
 async fn create_change_set_internal<Client: CloudFormation>(
     client: &Client,
     input: ApplyStackInput,
-) -> Result<Result<ChangeSet, ChangeSet>, ApplyStackError> {
+) -> Result<Result<ChangeSetWithType, ChangeSetWithType>, ApplyStackError> {
     let error = match create_change_set(client, input.into_raw()).await {
         Ok(change_set) => return Ok(Ok(change_set)),
         Err(error) => error,
@@ -725,13 +725,15 @@ async fn create_change_set_internal<Client: CloudFormation>(
         CreateChangeSetError::NoChanges(change_set) => Ok(Err(change_set)),
         CreateChangeSetError::CreateApi(error) => Err(ApplyStackError::from_rusoto_error(error)),
         CreateChangeSetError::PollApi(error) => Err(ApplyStackError::from_rusoto_error(error)),
-        CreateChangeSetError::Failed(change_set) => Err(ApplyStackError::CreateChangeSetFailed {
-            id: change_set.id,
-            status: change_set.status,
-            status_reason: change_set
-                .status_reason
-                .expect("ChangeSet failed without reason"),
-        }),
+        CreateChangeSetError::Failed(ChangeSetWithType { change_set, .. }) => {
+            Err(ApplyStackError::CreateChangeSetFailed {
+                id: change_set.change_set_id,
+                status: change_set.status,
+                status_reason: change_set
+                    .status_reason
+                    .expect("ChangeSet failed without reason"),
+            })
+        }
     }
 }
 
