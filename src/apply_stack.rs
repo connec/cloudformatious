@@ -9,7 +9,7 @@ use rusoto_cloudformation::{
     CloudFormation, CreateChangeSetInput, DescribeStacksInput, Stack, Tag,
 };
 use rusoto_core::RusotoError;
-use serde_plain::forward_display_to_serde;
+use serde_plain::{forward_display_to_serde, forward_from_str_to_serde};
 
 use crate::{
     change_set::{create_change_set, execute_change_set, ChangeSet, CreateChangeSetError},
@@ -302,7 +302,7 @@ impl ApplyStackInput {
 /// [2]: http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/template-macros.html
 /// [`AWS::Include`]: http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/create-reusable-transform-function-snippets-and-add-to-your-template-with-aws-include-transform.html
 /// [`AWS::Serverless`]: http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/transform-aws-serverless.html
-#[derive(Clone, Copy, Debug, serde::Serialize)]
+#[derive(Clone, Copy, Debug, serde::Deserialize, serde::Serialize)]
 pub enum Capability {
     /// Acknowledge IAM resources (*without* custom names only).
     #[serde(rename = "CAPABILITY_IAM")]
@@ -318,6 +318,7 @@ pub enum Capability {
 }
 
 forward_display_to_serde!(Capability);
+forward_from_str_to_serde!(Capability);
 
 /// An input parameter for an `apply_stack` operation.
 ///
