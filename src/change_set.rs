@@ -46,7 +46,7 @@ impl fmt::Display for ChangeSetType {
 }
 
 /// A planned set of changes to apply to a CloudFormation stack.
-#[derive(Debug)]
+#[derive(Clone, Debug, PartialEq)]
 #[allow(clippy::module_name_repetitions)]
 pub struct ChangeSet {
     /// Capabilities that were explicitly acknowledged when the change set was created.
@@ -162,7 +162,7 @@ impl ChangeSet {
 }
 
 /// The change set's execution status.
-#[derive(Debug, serde::Deserialize, serde::Serialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum ExecutionStatus {
     /// The change set is not available to execute.
@@ -189,7 +189,7 @@ forward_from_str_to_serde!(ExecutionStatus);
 
 /// The resource and the action that AWS CloudFormation will perform on it if you execute this
 /// change set.
-#[derive(Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ResourceChange {
     /// The action that AWS CloudFormation takes on the resource.
     pub action: Action,
@@ -245,7 +245,7 @@ impl ResourceChange {
 }
 
 /// The action that AWS CloudFormation takes on a resource.
-#[derive(Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Action {
     /// Adds a new resource.
     Add,
@@ -320,7 +320,7 @@ impl Action {
 /// If you have multiple changes with different `requires_recreation` values, the `Replacement`
 /// value depends on the change with the most impact. A `requires_recreation` value of `Always` has
 /// the most impact, followed by [`Conditionally`], and then [`Never`].
-#[derive(Debug, serde::Deserialize, serde::Serialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 pub enum Replacement {
     /// The resource will be replaced.
     True,
@@ -336,7 +336,7 @@ forward_display_to_serde!(Replacement);
 forward_from_str_to_serde!(Replacement);
 
 /// Indicates which resource attribute is triggering this update.
-#[derive(Debug, Eq, Hash, PartialEq, serde::Deserialize, serde::Serialize)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, serde::Deserialize, serde::Serialize)]
 pub enum ModifyScope {
     /// A change to the resource's properties.
     Properties,
@@ -361,7 +361,7 @@ forward_display_to_serde!(ModifyScope);
 forward_from_str_to_serde!(ModifyScope);
 
 /// A change that AWS CloudFormation will make to a resource.
-#[derive(Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ResourceChangeDetail {
     /// The group to which the CausingEntity value belongs.
     ///
@@ -402,7 +402,7 @@ impl ResourceChangeDetail {
 }
 
 /// The type of an entity that triggered a change.
-#[derive(Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ChangeSource {
     /// `Ref` intrinsic functions that refer to resources in the template, such as
     /// `{ "Ref" : "MyEC2InstanceResource" }`.
@@ -465,7 +465,7 @@ impl ChangeSource {
     }
 }
 
-#[derive(Debug, serde::Deserialize, serde::Serialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 pub enum Evaluation {
     /// AWS CloudFormation can determine that the target value will change, and its value.
     ///
@@ -489,7 +489,7 @@ forward_from_str_to_serde!(Evaluation);
 
 /// The field that AWS CloudFormation will change, such as the name of a resource's property, and
 /// whether the resource will be recreated.
-#[derive(Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ResourceTargetDefinition {
     /// A change to the resource's properties.
     Properties {
@@ -554,7 +554,7 @@ impl ResourceTargetDefinition {
 }
 
 /// Indicates whether a change to a property causes the resource to be recreated.
-#[derive(Debug, serde::Deserialize, serde::Serialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 pub enum RequiresRecreation {
     /// The resource will not need to be recreated.
     Never,
@@ -671,24 +671,23 @@ pub(crate) async fn create_change_set<Client: CloudFormation>(
 
 pub(crate) async fn execute_change_set<Client: CloudFormation>(
     client: &Client,
-    ChangeSetWithType {
-        change_set_type,
-        change_set,
-    }: ChangeSetWithType,
+    stack_id: String,
+    change_set_id: String,
+    change_set_type: ChangeSetType,
 ) -> Result<
     StackOperation<'_, impl Fn(StackStatus) -> StackOperationStatus + Unpin>,
     RusotoError<ExecuteChangeSetError>,
 > {
     let started_at = Utc::now();
     let input = ExecuteChangeSetInput {
-        change_set_name: change_set.change_set_id,
+        change_set_name: change_set_id,
         ..ExecuteChangeSetInput::default()
     };
     client.execute_change_set(input).await?;
 
     Ok(StackOperation::new(
         client,
-        change_set.stack_id,
+        stack_id,
         started_at,
         match change_set_type {
             ChangeSetType::Create => check_create_progress,

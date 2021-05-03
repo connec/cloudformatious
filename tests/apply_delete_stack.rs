@@ -6,8 +6,8 @@ use rusoto_core::HttpClient;
 use rusoto_credential::{AutoRefreshingProvider, ChainProvider};
 
 use cloudformatious::{
-    ApplyStackError, ApplyStackInput, CloudFormatious, DeleteStackInput, ResourceStatus,
-    StackFailure, StackStatus, TemplateSource,
+    change_set::ExecutionStatus, ApplyStackError, ApplyStackInput, ChangeSetStatus,
+    CloudFormatious, DeleteStackInput, ResourceStatus, StackFailure, StackStatus, TemplateSource,
 };
 
 const NAME_PREFIX: &str = "rusoto-cloudformation-ext-testing-";
@@ -56,6 +56,27 @@ async fn create_stack_fut_ok() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[tokio::test]
+async fn create_stack_change_set_ok() -> Result<(), Box<dyn std::error::Error>> {
+    let client = get_client();
+
+    let stack_name = generated_name();
+    let input = ApplyStackInput::new(&stack_name, TemplateSource::inline(DUMMY_TEMPLATE));
+    let mut stack = client.apply_stack(input);
+
+    let change_set = stack.change_set().await?;
+    assert_eq!(change_set.status, ChangeSetStatus::CreateComplete);
+    assert_eq!(change_set.execution_status, ExecutionStatus::Available);
+    assert!(change_set.changes.is_empty());
+
+    let output = stack.await?;
+    assert_eq!(output.stack_status, StackStatus::CreateComplete);
+
+    clean_up(&client, stack_name).await?;
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn create_stack_stream_ok() -> Result<(), Box<dyn std::error::Error>> {
     let client = get_client();
 
@@ -90,13 +111,66 @@ async fn create_stack_stream_ok() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[tokio::test]
-async fn apply_idempotent() -> Result<(), Box<dyn std::error::Error>> {
+async fn create_stack_change_set_and_stream_ok() -> Result<(), Box<dyn std::error::Error>> {
     let client = get_client();
 
     let stack_name = generated_name();
     let input = ApplyStackInput::new(&stack_name, TemplateSource::inline(DUMMY_TEMPLATE));
-    let output1 = client.apply_stack(input.clone()).await?;
-    let output2 = client.apply_stack(input).await?;
+    let mut stack = client.apply_stack(input);
+
+    let change_set = stack.change_set().await?;
+    assert_eq!(change_set.status, ChangeSetStatus::CreateComplete);
+    assert_eq!(change_set.execution_status, ExecutionStatus::Available);
+    assert!(change_set.changes.is_empty());
+
+    let events: Vec<_> = stack
+        .events()
+        .map(|event| {
+            (
+                event.logical_resource_id().to_string(),
+                event.resource_status().to_string(),
+            )
+        })
+        .collect()
+        .await;
+    let output = stack.await?;
+
+    assert_eq!(output.stack_status, StackStatus::CreateComplete);
+    assert_eq!(
+        events,
+        vec![
+            (stack_name.clone(), "CREATE_IN_PROGRESS".to_string()),
+            (stack_name.clone(), "CREATE_COMPLETE".to_string()),
+        ]
+    );
+
+    clean_up(&client, stack_name).await?;
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn apply_overall_idempotent() -> Result<(), Box<dyn std::error::Error>> {
+    let client = get_client();
+
+    let stack_name = generated_name();
+    let input = ApplyStackInput::new(&stack_name, TemplateSource::inline(DUMMY_TEMPLATE));
+
+    let mut apply = client.apply_stack(input.clone());
+    let change_set = apply.change_set().await?;
+    assert_eq!(change_set.status, ChangeSetStatus::CreateComplete);
+    assert_eq!(change_set.execution_status, ExecutionStatus::Available);
+    assert!(change_set.changes.is_empty());
+    let output1 = apply.await?;
+
+    let mut apply = client.apply_stack(input);
+    let change_set = apply.change_set().await?;
+    assert_eq!(change_set.status, ChangeSetStatus::Failed);
+    assert!(change_set.status_reason.is_some());
+    assert_eq!(change_set.execution_status, ExecutionStatus::Unavailable);
+    assert!(change_set.changes.is_empty());
+    let output2 = apply.await?;
+
     assert_eq!(output2.stack_status, StackStatus::CreateComplete);
     assert_eq!(output1, output2);
 

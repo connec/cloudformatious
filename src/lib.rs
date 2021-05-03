@@ -11,8 +11,8 @@ pub mod change_set;
 use rusoto_cloudformation::{CloudFormation, CloudFormationClient};
 
 pub use apply_stack::{
-    ApplyStack, ApplyStackError, ApplyStackEvents, ApplyStackInput, ApplyStackOutput, Capability,
-    Parameter, StackOutput, TemplateSource,
+    ApplyStack, ApplyStackChangeSet, ApplyStackError, ApplyStackEvents, ApplyStackInput,
+    ApplyStackOutput, Capability, Parameter, StackOutput, TemplateSource,
 };
 pub use delete_stack::{DeleteStack, DeleteStackError, DeleteStackEvents, DeleteStackInput};
 pub use event::{StackEvent, StackEventDetails};

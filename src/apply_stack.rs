@@ -12,7 +12,9 @@ use rusoto_core::RusotoError;
 use serde_plain::{forward_display_to_serde, forward_from_str_to_serde};
 
 use crate::{
-    change_set::{create_change_set, execute_change_set, ChangeSetWithType, CreateChangeSetError},
+    change_set::{
+        create_change_set, execute_change_set, ChangeSet, ChangeSetWithType, CreateChangeSetError,
+    },
     stack::StackOperationError,
     ChangeSetStatus, StackEvent, StackFailure, StackStatus, StackWarning,
 };
@@ -302,7 +304,7 @@ impl ApplyStackInput {
 /// [2]: http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/template-macros.html
 /// [`AWS::Include`]: http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/create-reusable-transform-function-snippets-and-add-to-your-template-with-aws-include-transform.html
 /// [`AWS::Serverless`]: http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/transform-aws-serverless.html
-#[derive(Clone, Copy, Debug, serde::Deserialize, serde::Serialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 pub enum Capability {
     /// Acknowledge IAM resources (*without* custom names only).
     #[serde(rename = "CAPABILITY_IAM")]
@@ -587,9 +589,14 @@ impl std::error::Error for ApplyStackError {
 /// This implements `Future`, which will simply wait for the operation to conclude. If you want to
 /// observe progress, see [`ApplyStack::events`].
 pub struct ApplyStack<'client> {
+    /// The stream of internal events that drives the different levels of the API.
+    ///
+    /// This might not be the best way of driving things, but it works with a few rough edges in the
+    /// form of various possible panics that could arise from unanticipated execution patterns (e.g.
+    /// attempting to await multiple times, or calling APIs out of order).
     event_stream: Pin<Box<dyn Stream<Item = Result<ApplyStackEvent, ApplyStackError>> + 'client>>,
 
-    // The `ApplyStackOutput` is moved here once it's been emitted by the stream.
+    /// The `ApplyStackOutput` is moved here once it's been emitted by the stream.
     output: Option<Result<ApplyStackOutput, ApplyStackError>>,
 }
 
@@ -599,19 +606,31 @@ impl<'client> ApplyStack<'client> {
         input: ApplyStackInput,
     ) -> Self {
         let event_stream = try_stream! {
-            let change_set = match create_change_set_internal(client, input).await? {
-                Ok(change_set) => change_set,
-                Err(ChangeSetWithType { change_set, .. }) => {
-                    let output = describe_output(client, change_set.stack_id).await?;
-                    yield ApplyStackEvent::Output(output);
-                    return;
-                }
-            };
-            let stack_id = change_set.change_set.stack_id.clone();
+            let (stack_id, change_set_id, change_set_type) =
+                match create_change_set_internal(client, input).await? {
+                    Ok(ChangeSetWithType {
+                        change_set,
+                        change_set_type,
+                    }) => {
+                        let stack_id = change_set.stack_id.clone();
+                        let change_set_id = change_set.change_set_id.clone();
+                        yield ApplyStackEvent::ChangeSet(change_set);
+                        (stack_id, change_set_id, change_set_type)
+                    }
+                    Err(ChangeSetWithType { change_set, .. }) => {
+                        let stack_id = change_set.stack_id.clone();
+                        yield ApplyStackEvent::ChangeSet(change_set);
 
-            let mut operation = execute_change_set(client, change_set)
-                .await
-                .map_err(ApplyStackError::from_rusoto_error)?;
+                        let output = describe_output(client, stack_id).await?;
+                        yield ApplyStackEvent::Output(output);
+                        return;
+                    }
+                };
+
+            let mut operation =
+                execute_change_set(client, stack_id.clone(), change_set_id, change_set_type)
+                    .await
+                    .map_err(ApplyStackError::from_rusoto_error)?;
             while let Some(event) = operation
                 .try_next()
                 .await
@@ -645,27 +664,16 @@ impl<'client> ApplyStack<'client> {
         }
     }
 
+    /// Get the `ChangeSet` that will be applied.
+    ///
+    /// The change set will not be executed if you never poll again.
+    pub fn change_set(&mut self) -> ApplyStackChangeSet<'client, '_> {
+        ApplyStackChangeSet(self)
+    }
+
     /// Get a `Stream` of `StackEvent`s.
     pub fn events(&mut self) -> ApplyStackEvents<'client, '_> {
         ApplyStackEvents(self)
-    }
-
-    fn poll_next_internal(&mut self, ctx: &mut task::Context) -> task::Poll<Option<StackEvent>> {
-        match self.event_stream.as_mut().poll_next(ctx) {
-            task::Poll::Pending => task::Poll::Pending,
-            task::Poll::Ready(None) => task::Poll::Ready(None),
-            task::Poll::Ready(Some(Ok(ApplyStackEvent::Event(event)))) => {
-                task::Poll::Ready(Some(event))
-            }
-            task::Poll::Ready(Some(Ok(ApplyStackEvent::Output(output)))) => {
-                self.output.replace(Ok(output));
-                task::Poll::Ready(None)
-            }
-            task::Poll::Ready(Some(Err(error))) => {
-                self.output.replace(Err(error));
-                task::Poll::Ready(None)
-            }
-        }
     }
 }
 
@@ -674,7 +682,7 @@ impl Future for ApplyStack<'_> {
 
     fn poll(mut self: Pin<&mut Self>, ctx: &mut task::Context) -> task::Poll<Self::Output> {
         loop {
-            match self.poll_next_internal(ctx) {
+            match self.event_stream.as_mut().poll_next(ctx) {
                 task::Poll::Pending => return task::Poll::Pending,
                 task::Poll::Ready(None) => {
                     return task::Poll::Ready(
@@ -683,7 +691,50 @@ impl Future for ApplyStack<'_> {
                             .expect("end of stream without err or output"),
                     )
                 }
-                task::Poll::Ready(Some(_)) => continue,
+                task::Poll::Ready(Some(Ok(ApplyStackEvent::ChangeSet(_))))
+                | task::Poll::Ready(Some(Ok(ApplyStackEvent::Event(_)))) => continue,
+                task::Poll::Ready(Some(Ok(ApplyStackEvent::Output(output)))) => {
+                    self.output.replace(Ok(output));
+                    continue;
+                }
+                task::Poll::Ready(Some(Err(error))) => {
+                    self.output.replace(Err(error));
+                    continue;
+                }
+            }
+        }
+    }
+}
+
+/// Return value of [`ApplyStack::change_set`].
+#[allow(clippy::module_name_repetitions)]
+pub struct ApplyStackChangeSet<'client, 'apply>(&'apply mut ApplyStack<'client>);
+
+impl Future for ApplyStackChangeSet<'_, '_> {
+    type Output = Result<ChangeSet, ApplyStackError>;
+
+    fn poll(mut self: Pin<&mut Self>, ctx: &mut task::Context) -> task::Poll<Self::Output> {
+        loop {
+            match self.0.event_stream.as_mut().poll_next(ctx) {
+                task::Poll::Pending => return task::Poll::Pending,
+                task::Poll::Ready(None) => match self.0.output.take() {
+                    None => panic!("end of stream without change set"),
+                    Some(Ok(_)) => panic!("saw output before change set"),
+                    Some(Err(error)) => return task::Poll::Ready(Err(error)),
+                },
+                task::Poll::Ready(Some(Ok(ApplyStackEvent::ChangeSet(change_set)))) => {
+                    return task::Poll::Ready(Ok(change_set));
+                }
+                task::Poll::Ready(Some(Ok(ApplyStackEvent::Event(_)))) => {
+                    panic!("saw stack event before change set");
+                }
+                task::Poll::Ready(Some(Ok(ApplyStackEvent::Output(_)))) => {
+                    panic!("saw output before change set");
+                }
+                task::Poll::Ready(Some(Err(error))) => {
+                    self.0.output.replace(Err(error));
+                    continue;
+                }
             }
         }
     }
@@ -700,12 +751,32 @@ impl Stream for ApplyStackEvents<'_, '_> {
         mut self: Pin<&mut Self>,
         ctx: &mut task::Context,
     ) -> task::Poll<Option<Self::Item>> {
-        self.0.poll_next_internal(ctx)
+        loop {
+            match self.0.event_stream.as_mut().poll_next(ctx) {
+                task::Poll::Pending => return task::Poll::Pending,
+                task::Poll::Ready(None) => return task::Poll::Ready(None),
+                task::Poll::Ready(Some(Ok(ApplyStackEvent::ChangeSet(_)))) => continue,
+                task::Poll::Ready(Some(Ok(ApplyStackEvent::Event(event)))) => {
+                    return task::Poll::Ready(Some(event))
+                }
+                task::Poll::Ready(Some(Ok(ApplyStackEvent::Output(output)))) => {
+                    self.0.output.replace(Ok(output));
+                    return task::Poll::Ready(None);
+                }
+                task::Poll::Ready(Some(Err(error))) => {
+                    self.0.output.replace(Err(error));
+                    return task::Poll::Ready(None);
+                }
+            }
+        }
     }
 }
 
 /// Events emitted by an `apply_stack` operation internally.
 enum ApplyStackEvent {
+    /// The change set has been created.
+    ChangeSet(ChangeSet),
+
     /// A stack event emitted by CloudFormation during the `apply_stack` operation.
     Event(StackEvent),
 
