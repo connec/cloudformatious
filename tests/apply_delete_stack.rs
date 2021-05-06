@@ -6,8 +6,9 @@ use rusoto_core::HttpClient;
 use rusoto_credential::{AutoRefreshingProvider, ChainProvider};
 
 use cloudformatious::{
-    change_set::ExecutionStatus, ApplyStackError, ApplyStackInput, ChangeSetStatus,
-    CloudFormatious, DeleteStackInput, ResourceStatus, StackFailure, StackStatus, TemplateSource,
+    change_set::{Action, ExecutionStatus},
+    ApplyStackError, ApplyStackInput, ChangeSetStatus, CloudFormatious, DeleteStackInput,
+    ResourceStatus, StackFailure, StackStatus, TemplateSource,
 };
 
 const NAME_PREFIX: &str = "rusoto-cloudformation-ext-testing-";
@@ -70,6 +71,36 @@ async fn create_stack_change_set_ok() -> Result<(), Box<dyn std::error::Error>> 
 
     let output = stack.await?;
     assert_eq!(output.stack_status, StackStatus::CreateComplete);
+
+    clean_up(&client, stack_name).await?;
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn create_stack_change_set_cancel() -> Result<(), Box<dyn std::error::Error>> {
+    let client = get_client();
+
+    let stack_name = generated_name();
+    let input = ApplyStackInput::new(&stack_name, TemplateSource::inline(FAILING_TEMPLATE));
+    let mut stack = client.apply_stack(input);
+
+    let change_set = stack.change_set().await?;
+    assert_eq!(change_set.status, ChangeSetStatus::CreateComplete);
+    assert_eq!(change_set.execution_status, ExecutionStatus::Available);
+
+    let changes: Vec<_> = change_set
+        .changes
+        .iter()
+        .map(|change| {
+            (
+                change.action,
+                change.logical_resource_id.as_str(),
+                change.resource_type.as_str(),
+            )
+        })
+        .collect();
+    assert_eq!(changes, vec![(Action::Add, "Vpc", "AWS::EC2::VPC")]);
 
     clean_up(&client, stack_name).await?;
 
