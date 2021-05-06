@@ -94,13 +94,13 @@ async fn create_stack_change_set_cancel() -> Result<(), Box<dyn std::error::Erro
         .iter()
         .map(|change| {
             (
-                change.action,
+                &change.action,
                 change.logical_resource_id.as_str(),
                 change.resource_type.as_str(),
             )
         })
         .collect();
-    assert_eq!(changes, vec![(Action::Add, "Vpc", "AWS::EC2::VPC")]);
+    assert_eq!(changes, vec![(&Action::Add, "Vpc", "AWS::EC2::VPC")]);
 
     clean_up(&client, stack_name).await?;
 

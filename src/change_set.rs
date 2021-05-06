@@ -195,10 +195,6 @@ pub struct ResourceChange {
     /// The action that AWS CloudFormation takes on the resource.
     pub action: Action,
 
-    /// For the [`Modify`](Action::Modify) action, a list of structures that describe the changes
-    /// that AWS CloudFormation will make to the resource.
-    pub details: Vec<ResourceChangeDetail>,
-
     /// The resource's logical ID, which is defined in the stack's template.
     pub logical_resource_id: String,
 
@@ -225,15 +221,10 @@ impl ResourceChange {
                     .action
                     .as_deref()
                     .expect("ResourceChange without action"),
+                change.details,
                 change.replacement,
                 change.scope,
             ),
-            details: change
-                .details
-                .unwrap_or_default()
-                .into_iter()
-                .map(ResourceChangeDetail::from_raw)
-                .collect(),
             logical_resource_id: change
                 .logical_resource_id
                 .expect("ResourceChange without logical_resource_id"),
@@ -246,20 +237,13 @@ impl ResourceChange {
 }
 
 /// The action that AWS CloudFormation takes on a resource.
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Action {
     /// Adds a new resource.
     Add,
 
     /// Changes a resource.
-    Modify {
-        /// Indicates whether AWS CloudFormation will replace the resource by creating a new one and
-        /// deleting the old one.
-        replacement: Replacement,
-
-        /// Indicates which resource attribute is triggering this update.
-        scope: EnumSet<ModifyScope>,
-    },
+    Modify(ModifyDetail),
 
     /// Deletes a resource.
     Remove,
@@ -272,9 +256,19 @@ pub enum Action {
 }
 
 impl Action {
-    fn from_raw(action: &str, replacement: Option<String>, scope: Option<Vec<String>>) -> Self {
+    fn from_raw(
+        action: &str,
+        details: Option<Vec<rusoto_cloudformation::ResourceChangeDetail>>,
+        replacement: Option<String>,
+        scope: Option<Vec<String>>,
+    ) -> Self {
         match action {
             "Add" | "Remove" | "Import" | "Dynamic" => {
+                assert!(
+                    matches!(details.as_deref(), None | Some([])),
+                    "ResourceChange with action {:?} and details",
+                    action
+                );
                 assert!(
                     replacement.is_none(),
                     "ResourceChange with action {:?} and replacement",
@@ -293,20 +287,51 @@ impl Action {
                     _ => unreachable!(),
                 }
             }
-            "Modify" => Self::Modify {
-                replacement: replacement
-                    .expect("ResourceChange with action \"Modify\" without replacement")
-                    .parse()
-                    .expect("ResourceChange with invalid replacement"),
-                scope: scope
-                    .expect("ResourceChange with action \"Modify\" without scope")
-                    .into_iter()
-                    .map(|scope| -> ModifyScope {
-                        scope.parse().expect("ResourceChange with invalid scope")
-                    })
-                    .collect(),
-            },
+            "Modify" => Self::Modify(ModifyDetail::from_raw(
+                details.expect("ResourceChange with action \"Modify\" without details"),
+                &replacement.expect("ResourceChange with action \"Modify\" without replacement"),
+                &scope.expect("ResourceChange with action \"Modify\" without scope"),
+            )),
             _ => panic!("ResourceChange with invalid action {:?}", action),
+        }
+    }
+}
+
+/// Additional detail for resource modifications.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ModifyDetail {
+    /// A list of structures that describe the changes that AWS CloudFormation will make to the
+    /// resource.
+    pub details: Vec<ResourceChangeDetail>,
+
+    /// Indicates whether AWS CloudFormation will replace the resource by creating a new one and
+    /// deleting the old one.
+    pub replacement: Replacement,
+
+    /// Indicates which resource attribute is triggering this update.
+    pub scope: EnumSet<ModifyScope>,
+}
+
+impl ModifyDetail {
+    fn from_raw(
+        details: Vec<rusoto_cloudformation::ResourceChangeDetail>,
+        replacement: &str,
+        scope: &[String],
+    ) -> Self {
+        Self {
+            details: details
+                .into_iter()
+                .map(ResourceChangeDetail::from_raw)
+                .collect(),
+            replacement: replacement
+                .parse()
+                .expect("ResourceChange with invalid replacement"),
+            scope: scope
+                .iter()
+                .map(|scope| -> ModifyScope {
+                    scope.parse().expect("ResourceChange with invalid scope")
+                })
+                .collect(),
         }
     }
 }
