@@ -108,6 +108,57 @@ async fn create_stack_change_set_cancel() -> Result<(), Box<dyn std::error::Erro
 }
 
 #[tokio::test]
+async fn create_stack_change_set_cancel_idempotent() -> Result<(), Box<dyn std::error::Error>> {
+    let client = get_client();
+
+    let stack_name = generated_name();
+
+    let input = ApplyStackInput::new(&stack_name, TemplateSource::inline(FAILING_TEMPLATE));
+    let mut stack = client.apply_stack(input);
+
+    let change_set = stack.change_set().await?;
+    assert_eq!(change_set.status, ChangeSetStatus::CreateComplete);
+    assert_eq!(change_set.execution_status, ExecutionStatus::Available);
+
+    let changes: Vec<_> = change_set
+        .changes
+        .iter()
+        .map(|change| {
+            (
+                &change.action,
+                change.logical_resource_id.as_str(),
+                change.resource_type.as_str(),
+            )
+        })
+        .collect();
+    assert_eq!(changes, vec![(&Action::Add, "Vpc", "AWS::EC2::VPC")]);
+
+    let input = ApplyStackInput::new(&stack_name, TemplateSource::inline(FAILING_TEMPLATE));
+    let mut stack = client.apply_stack(input);
+
+    let change_set = stack.change_set().await?;
+    assert_eq!(change_set.status, ChangeSetStatus::CreateComplete);
+    assert_eq!(change_set.execution_status, ExecutionStatus::Available);
+
+    let changes: Vec<_> = change_set
+        .changes
+        .iter()
+        .map(|change| {
+            (
+                &change.action,
+                change.logical_resource_id.as_str(),
+                change.resource_type.as_str(),
+            )
+        })
+        .collect();
+    assert_eq!(changes, vec![(&Action::Add, "Vpc", "AWS::EC2::VPC")]);
+
+    clean_up(&client, stack_name).await?;
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn create_stack_stream_ok() -> Result<(), Box<dyn std::error::Error>> {
     let client = get_client();
 
