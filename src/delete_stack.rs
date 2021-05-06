@@ -215,7 +215,7 @@ impl<'client> DeleteStack<'client> {
                 yield event;
             }
 
-            match operation.verify().await {
+            match operation.verify() {
                 Ok(()) => {}
                 Err(StackOperationError::Failure(failure)) => {
                     Err(DeleteStackError::Failure(failure))?;

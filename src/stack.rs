@@ -194,7 +194,7 @@ where
         }
     }
 
-    pub(crate) async fn verify(self) -> Result<(), StackOperationError> {
+    pub(crate) fn verify(self) -> Result<(), StackOperationError> {
         if let Some(stack_status) = self.stack_error_status {
             return Err(StackOperationError::Failure(StackFailure {
                 stack_id: self.stack_id,

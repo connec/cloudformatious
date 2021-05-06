@@ -639,7 +639,7 @@ impl<'client> ApplyStack<'client> {
                 yield ApplyStackEvent::Event(event);
             }
 
-            let warning = match operation.verify().await {
+            let warning = match operation.verify() {
                 Err(StackOperationError::Failure(failure)) => {
                     Err(ApplyStackError::Failure(failure))?;
                     unreachable!()
