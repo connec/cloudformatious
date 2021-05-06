@@ -1,8 +1,9 @@
 //! Helpers for working with change sets.
 
-use std::{collections::HashSet, fmt, time::Duration};
+use std::{fmt, time::Duration};
 
 use chrono::{DateTime, Utc};
+use enumset::EnumSet;
 use futures_util::TryFutureExt;
 use memmem::{Searcher, TwoWaySearcher};
 use rusoto_cloudformation::{
@@ -245,7 +246,7 @@ impl ResourceChange {
 }
 
 /// The action that AWS CloudFormation takes on a resource.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum Action {
     /// Adds a new resource.
     Add,
@@ -257,7 +258,7 @@ pub enum Action {
         replacement: Replacement,
 
         /// Indicates which resource attribute is triggering this update.
-        scope: HashSet<ModifyScope>,
+        scope: EnumSet<ModifyScope>,
     },
 
     /// Deletes a resource.
@@ -300,7 +301,9 @@ impl Action {
                 scope: scope
                     .expect("ResourceChange with action \"Modify\" without scope")
                     .into_iter()
-                    .map(|scope| scope.parse().expect("ResourceChange with invalid scope"))
+                    .map(|scope| -> ModifyScope {
+                        scope.parse().expect("ResourceChange with invalid scope")
+                    })
                     .collect(),
             },
             _ => panic!("ResourceChange with invalid action {:?}", action),
@@ -336,7 +339,8 @@ forward_display_to_serde!(Replacement);
 forward_from_str_to_serde!(Replacement);
 
 /// Indicates which resource attribute is triggering this update.
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, serde::Deserialize, serde::Serialize)]
+#[derive(Debug, enumset::EnumSetType, serde::Deserialize, serde::Serialize)]
+#[enumset(no_ops, serialize_as_list)]
 pub enum ModifyScope {
     /// A change to the resource's properties.
     Properties,
