@@ -6,7 +6,9 @@ use futures_util::Stream;
 use rusoto_cloudformation::{CloudFormation, DescribeStackEventsError, DescribeStackEventsInput};
 use rusoto_core::RusotoError;
 
-use crate::{ResourceStatus, StackEvent, StackEventDetails, StackStatus, Status};
+use crate::{
+    status_reason::StatusReason, ResourceStatus, StackEvent, StackEventDetails, StackStatus, Status,
+};
 
 const POLL_INTERVAL_STACK_EVENT: Duration = Duration::from_secs(5);
 
@@ -14,7 +16,8 @@ const POLL_INTERVAL_STACK_EVENT: Duration = Duration::from_secs(5);
 ///
 /// This error tries to capture enough information to quickly identify the root-cause of the
 /// operation's failure (such as not having permission to create or update a particular resource
-/// in the stack).
+/// in the stack). [`stack_status_reason`](Self::stack_status_reason) and
+/// [`StackEventDetails::resource_status_reason`] may be useful for this purpose.
 #[derive(Debug)]
 #[allow(clippy::module_name_repetitions)]
 pub struct StackFailure {
@@ -38,6 +41,14 @@ pub struct StackFailure {
     /// matching [`StackEvent`] variants (when it would be a logical error for them to be
     /// anything other than the `Resource` variant).
     pub resource_events: Vec<(ResourceStatus, StackEventDetails)>,
+}
+
+impl StackFailure {
+    /// The *first* reason the stack moved into a failing state.
+    #[must_use]
+    pub fn stack_status_reason(&self) -> StatusReason {
+        StatusReason::new(Some(&self.stack_status_reason))
+    }
 }
 
 impl fmt::Display for StackFailure {
