@@ -11,7 +11,7 @@ use cloudformatious::{
     ResourceStatus, StackFailure, StackStatus, TemplateSource,
 };
 
-const NAME_PREFIX: &str = "rusoto-cloudformation-ext-testing-";
+const NAME_PREFIX: &str = "cloudformatious-testing-";
 const DUMMY_TEMPLATE: &str = r#"{
     "Conditions": {
         "Never": { "Fn::Equals": [true, false] }

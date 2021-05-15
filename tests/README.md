@@ -26,7 +26,7 @@ The identity to which the credentials pertain will need the following IAM policy
                 "cloudformation:DescribeStacks",
                 "cloudformation:ExecuteChangeSet"
             ],
-            "Resource": "arn:aws:cloudformation:*:*:stack/rusoto-cloudformation-ext-testing-*"
+            "Resource": "arn:aws:cloudformation:*:*:stack/cloudformatious-testing-*"
         }
     ]
 }
