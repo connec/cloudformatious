@@ -3,7 +3,7 @@
 
 use chrono::{DateTime, Utc};
 
-use crate::{ResourceStatus, StackStatus, Status};
+use crate::{status_reason::StatusReason, ResourceStatus, StackStatus, Status};
 
 /// A stack event from the `DescribeStackEvents` API.
 ///
@@ -262,8 +262,8 @@ impl StackEventDetails {
 
     /// Get the success/failure message associated with the resource.
     #[must_use]
-    pub fn resource_status_reason(&self) -> Option<&str> {
-        self.resource_status_reason.as_deref()
+    pub fn resource_status_reason(&self) -> StatusReason {
+        StatusReason::new(self.resource_status_reason.as_deref())
     }
 
     /// Get the type of resource.

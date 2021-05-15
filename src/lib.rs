@@ -7,6 +7,7 @@ mod stack;
 mod status;
 
 pub mod change_set;
+pub mod status_reason;
 
 use rusoto_cloudformation::{CloudFormation, CloudFormationClient};
 

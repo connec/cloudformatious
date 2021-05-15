@@ -284,7 +284,7 @@ async fn create_stack_fut_err() -> Result<(), Box<dyn std::error::Error>> {
                     (
                         details.logical_resource_id(),
                         *status,
-                        details.resource_status_reason(),
+                        details.resource_status_reason().inner(),
                     )
                 })
                 .collect::<Vec<_>>(),
@@ -349,7 +349,7 @@ async fn create_stack_stream_err() -> Result<(), Box<dyn std::error::Error>> {
                     (
                         details.logical_resource_id(),
                         *status,
-                        details.resource_status_reason(),
+                        details.resource_status_reason().inner(),
                     )
                 })
                 .collect::<Vec<_>>(),
@@ -410,7 +410,7 @@ async fn update_stack_fut_err() -> Result<(), Box<dyn std::error::Error>> {
                     (
                         details.logical_resource_id(),
                         *status,
-                        details.resource_status_reason(),
+                        details.resource_status_reason().inner(),
                     )
                 })
                 .collect::<Vec<_>>(),
