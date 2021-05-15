@@ -77,6 +77,11 @@ pub struct ChangeSet {
     /// can’t execute the change set, the [`status`] indicates why. For example, a change set might
     /// be in an [`Unavailable`] state because AWS CloudFormation is still creating it or in an
     /// [`Obsolete`] state because the stack was already updated.
+    ///
+    /// [`Available`]: ExecutionStatus::Available
+    /// [`Obsolete`]: ExecutionStatus::Obsolete
+    /// [`Unavailable`]: ExecutionStatus::Unavailable
+    /// [`status`]: Self::status
     pub execution_status: ExecutionStatus,
 
     /// The Simple Notification Service (SNS) topic ARNs to publish stack related events.
@@ -348,6 +353,12 @@ impl ModifyDetail {
 /// If you have multiple changes with different `requires_recreation` values, the `Replacement`
 /// value depends on the change with the most impact. A `requires_recreation` value of `Always` has
 /// the most impact, followed by [`Conditionally`], and then [`Never`].
+///
+/// [`Always`]: RequiresRecreation::Always
+/// [`Conditionally`]: RequiresRecreation::Conditionally
+/// [`Never`]: RequiresRecreation::Never
+/// [`Static`]: Evaluation::Static
+/// [`Dynamic`]: Evaluation::Dynamic
 #[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 pub enum Replacement {
     /// The resource will be replaced.
