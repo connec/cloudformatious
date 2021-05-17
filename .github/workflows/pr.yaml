@@ -22,7 +22,7 @@ jobs:
             ~/.cargo
             target
       - name: Check
-        run: cargo check
+        run: cargo check --all-targets
 
   clippy:
     runs-on: ubuntu-20.04
@@ -37,7 +37,7 @@ jobs:
             ~/.cargo
             target
       - name: Clippy
-        run: cargo clippy
+        run: cargo clippy --all-targets
 
   doc-check:
     runs-on: ubuntu-20.04
