@@ -374,28 +374,36 @@ pub enum Replacement {
 forward_display_to_serde!(Replacement);
 forward_from_str_to_serde!(Replacement);
 
-/// Indicates which resource attribute is triggering this update.
-#[derive(Debug, enumset::EnumSetType, serde::Deserialize, serde::Serialize)]
-#[enumset(no_ops, serialize_as_list)]
-pub enum ModifyScope {
-    /// A change to the resource's properties.
-    Properties,
+// The derive for EnumSetType creates an item that triggers this lint, so it has to be disabled
+// at the module level. We don't want to disable it too broadly though, so we wrap its declaration
+// in a module and re-export from that.
+mod modify_scope {
+    #![allow(clippy::expl_impl_clone_on_copy)]
 
-    /// A change to the resource's metadata.
-    Metadata,
+    /// Indicates which resource attribute is triggering this update.
+    #[derive(Debug, enumset::EnumSetType, serde::Deserialize, serde::Serialize)]
+    #[enumset(no_ops, serialize_as_list)]
+    pub enum ModifyScope {
+        /// A change to the resource's properties.
+        Properties,
 
-    /// A change to the resource's creation policy.
-    CreationPolicy,
+        /// A change to the resource's metadata.
+        Metadata,
 
-    /// A change to the resource's update policy.
-    UpdatePolicy,
+        /// A change to the resource's creation policy.
+        CreationPolicy,
 
-    /// A change to the resource's deletion policy.
-    DeletionPolicy,
+        /// A change to the resource's update policy.
+        UpdatePolicy,
 
-    /// A change to the resource's tags.
-    Tags,
+        /// A change to the resource's deletion policy.
+        DeletionPolicy,
+
+        /// A change to the resource's tags.
+        Tags,
+    }
 }
+pub use modify_scope::ModifyScope;
 
 forward_display_to_serde!(ModifyScope);
 forward_from_str_to_serde!(ModifyScope);
