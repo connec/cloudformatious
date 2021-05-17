@@ -14,13 +14,20 @@ jobs:
     runs-on: ubuntu-20.04
     steps:
       - uses: actions/checkout@v2
-      - name: Cache
+      - name: Cargo cache
         uses: actions/cache@v2
         with:
           key: ${{ github.sha }}
           path: |
-            ~/.cargo
-            target
+            ~/.cargo/bin
+            ~/.cargo/git/db
+            ~/.cargo/registry/cache
+            ~/.cargo/registry/index
+      - name: Check cache
+        uses: actions/cache@v2
+        with:
+          key: ${{ github.sha }}
+          path: target
       - name: Check
         run: cargo check --all-targets
 
@@ -29,13 +36,20 @@ jobs:
     needs: [check]
     steps:
       - uses: actions/checkout@v2
-      - name: Cache
+      - name: Cargo cache
         uses: actions/cache@v2
         with:
           key: ${{ github.sha }}
           path: |
-            ~/.cargo
-            target
+            ~/.cargo/bin
+            ~/.cargo/git/db
+            ~/.cargo/registry/cache
+            ~/.cargo/registry/index
+      - name: Check cache
+        uses: actions/cache@v2
+        with:
+          key: ${{ github.sha }}
+          path: target
       - name: Clippy
         run: cargo clippy --all-targets
 
@@ -44,20 +58,37 @@ jobs:
     needs: [check]
     steps:
       - uses: actions/checkout@v2
-      - name: Cache
+      - name: Cargo cache
         uses: actions/cache@v2
         with:
           key: ${{ github.sha }}
           path: |
-            ~/.cargo
-            target
+            ~/.cargo/bin
+            ~/.cargo/git/db
+            ~/.cargo/registry/cache
+            ~/.cargo/registry/index
+      - name: Check cache
+        uses: actions/cache@v2
+        with:
+          key: ${{ github.sha }}
+          path: target
       - name: Doc check
         run: cargo doc --no-deps
 
   test:
     runs-on: ubuntu-20.04
+    needs: [check]
     steps:
       - uses: actions/checkout@v2
+      - name: Cargo cache
+        uses: actions/cache@v2
+        with:
+          key: ${{ github.sha }}
+          path: |
+            ~/.cargo/bin
+            ~/.cargo/git/db
+            ~/.cargo/registry/cache
+            ~/.cargo/registry/index
       - name: Test
         run: cargo test
         env:
