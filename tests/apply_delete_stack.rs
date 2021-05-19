@@ -12,7 +12,7 @@ use cloudformatious::{
 };
 
 const NAME_PREFIX: &str = "cloudformatious-testing-";
-const DUMMY_TEMPLATE: &str = r#"{
+const EMPTY_TEMPLATE: &str = r#"{
     "Conditions": {
         "Never": { "Fn::Equals": [true, false] }
     },
@@ -47,7 +47,7 @@ async fn create_stack_fut_ok() -> Result<(), Box<dyn std::error::Error>> {
     let client = get_client();
 
     let stack_name = generated_name();
-    let input = ApplyStackInput::new(&stack_name, TemplateSource::inline(DUMMY_TEMPLATE));
+    let input = ApplyStackInput::new(&stack_name, TemplateSource::inline(EMPTY_TEMPLATE));
     let output = client.apply_stack(input).await?;
     assert_eq!(output.stack_status, StackStatus::CreateComplete);
 
@@ -61,7 +61,7 @@ async fn create_stack_change_set_ok() -> Result<(), Box<dyn std::error::Error>> 
     let client = get_client();
 
     let stack_name = generated_name();
-    let input = ApplyStackInput::new(&stack_name, TemplateSource::inline(DUMMY_TEMPLATE));
+    let input = ApplyStackInput::new(&stack_name, TemplateSource::inline(EMPTY_TEMPLATE));
     let mut stack = client.apply_stack(input);
 
     let change_set = stack.change_set().await?;
@@ -163,7 +163,7 @@ async fn create_stack_stream_ok() -> Result<(), Box<dyn std::error::Error>> {
     let client = get_client();
 
     let stack_name = generated_name();
-    let input = ApplyStackInput::new(&stack_name, TemplateSource::inline(DUMMY_TEMPLATE));
+    let input = ApplyStackInput::new(&stack_name, TemplateSource::inline(EMPTY_TEMPLATE));
     let mut stack = client.apply_stack(input);
 
     let events: Vec<_> = stack
@@ -197,7 +197,7 @@ async fn create_stack_change_set_and_stream_ok() -> Result<(), Box<dyn std::erro
     let client = get_client();
 
     let stack_name = generated_name();
-    let input = ApplyStackInput::new(&stack_name, TemplateSource::inline(DUMMY_TEMPLATE));
+    let input = ApplyStackInput::new(&stack_name, TemplateSource::inline(EMPTY_TEMPLATE));
     let mut stack = client.apply_stack(input);
 
     let change_set = stack.change_set().await?;
@@ -236,7 +236,7 @@ async fn apply_overall_idempotent() -> Result<(), Box<dyn std::error::Error>> {
     let client = get_client();
 
     let stack_name = generated_name();
-    let input = ApplyStackInput::new(&stack_name, TemplateSource::inline(DUMMY_TEMPLATE));
+    let input = ApplyStackInput::new(&stack_name, TemplateSource::inline(EMPTY_TEMPLATE));
 
     let mut apply = client.apply_stack(input.clone());
     let change_set = apply.change_set().await?;
@@ -388,7 +388,7 @@ async fn update_stack_fut_err() -> Result<(), Box<dyn std::error::Error>> {
     let client = get_client();
 
     let stack_name = generated_name();
-    let input = ApplyStackInput::new(&stack_name, TemplateSource::inline(DUMMY_TEMPLATE));
+    let input = ApplyStackInput::new(&stack_name, TemplateSource::inline(EMPTY_TEMPLATE));
     let output = client.apply_stack(input).await?;
     assert_eq!(output.stack_status, StackStatus::CreateComplete);
 
@@ -434,7 +434,7 @@ async fn delete_stack_fut_ok() -> Result<(), Box<dyn std::error::Error>> {
     let client = get_client();
 
     let stack_name = generated_name();
-    let input = ApplyStackInput::new(&stack_name, TemplateSource::inline(DUMMY_TEMPLATE));
+    let input = ApplyStackInput::new(&stack_name, TemplateSource::inline(EMPTY_TEMPLATE));
     let stack = client.apply_stack(input).await?;
 
     let input = DeleteStackInput::new(&stack_name);
@@ -545,7 +545,7 @@ async fn delete_stack_idempotent() -> Result<(), Box<dyn std::error::Error>> {
     let client = get_client();
 
     let stack_name = generated_name();
-    let input = ApplyStackInput::new(&stack_name, TemplateSource::inline(DUMMY_TEMPLATE));
+    let input = ApplyStackInput::new(&stack_name, TemplateSource::inline(EMPTY_TEMPLATE));
     let stack = client.apply_stack(input).await?;
 
     let input = DeleteStackInput::new(&stack.stack_id);
