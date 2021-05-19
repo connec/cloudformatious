@@ -1,0 +1,25 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Dependencies for CloudFormatious tests.
+
+Resources:
+  Policy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      Description: Grants the permissions needed to run CloudFormatious integration tests.
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: CloudFormationStackOperations
+            Effect: Allow
+            Action:
+              - cloudformation:CreateChangeSet
+              - cloudformation:DeleteStack
+              - cloudformation:DescribeChangeSet
+              - cloudformation:DescribeStackEvents
+              - cloudformation:DescribeStacks
+              - cloudformation:ExecuteChangeSet
+            Resource: arn:aws:cloudformation:*:*:stack/cloudformatious-testing-*
+
+Outputs:
+  PolicyArn:
+    Value: !Ref Policy
