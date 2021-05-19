@@ -8,7 +8,7 @@ use rusoto_credential::{AutoRefreshingProvider, ChainProvider};
 use cloudformatious::{
     change_set::{Action, ExecutionStatus},
     ApplyStackError, ApplyStackInput, ChangeSetStatus, CloudFormatious, DeleteStackInput,
-    ResourceStatus, StackFailure, StackStatus, TemplateSource,
+    Parameter, ResourceStatus, StackFailure, StackStatus, TemplateSource,
 };
 
 const NAME_PREFIX: &str = "cloudformatious-testing-";
@@ -24,10 +24,24 @@ const EMPTY_TEMPLATE: &str = r#"{
     }
 }"#;
 const NON_EMPTY_TEMPLATE: &str = r#"{
+    "Parameters": {
+        "CidrBlock": {
+            "Type": "String"
+        }
+    },
     "Resources": {
-        "Dummy": {
-            "Type": "AWS::CloudFormation::WaitConditionHandle",
-            "Properties": {}
+        "Subnet": {
+            "Type": "AWS::EC2::Subnet",
+            "Properties": {
+                "CidrBlock": {"Ref": "CidrBlock"},
+                "Tags": [
+                    {
+                        "Key": "VpcId",
+                        "Value": {"Fn::ImportValue": "cloudformatious-testing-VpcId"}
+                    }
+                ],
+                "VpcId": {"Fn::ImportValue": "cloudformatious-testing-VpcId"}
+            }
         }
     }
 }"#;
@@ -465,7 +479,11 @@ async fn delete_stack_stream_ok() -> Result<(), Box<dyn std::error::Error>> {
     let client = get_client();
 
     let stack_name = generated_name();
-    let input = ApplyStackInput::new(&stack_name, TemplateSource::inline(NON_EMPTY_TEMPLATE));
+    let input = ApplyStackInput::new(&stack_name, TemplateSource::inline(NON_EMPTY_TEMPLATE))
+        .set_parameters([Parameter {
+            key: "CidrBlock".to_string(),
+            value: "10.0.0.0/28".to_string(),
+        }]);
     let stack = client.apply_stack(input).await?;
 
     let input = DeleteStackInput::new(&stack_name);
@@ -487,8 +505,8 @@ async fn delete_stack_stream_ok() -> Result<(), Box<dyn std::error::Error>> {
         events,
         vec![
             (stack_name.clone(), "DELETE_IN_PROGRESS".to_string()),
-            ("Dummy".to_string(), "DELETE_IN_PROGRESS".to_string()),
-            ("Dummy".to_string(), "DELETE_COMPLETE".to_string()),
+            ("Subnet".to_string(), "DELETE_IN_PROGRESS".to_string()),
+            ("Subnet".to_string(), "DELETE_COMPLETE".to_string()),
             (stack_name.clone(), "DELETE_COMPLETE".to_string())
         ]
     );
