@@ -413,8 +413,11 @@ forward_from_str_to_serde!(ModifyScope);
 pub struct ResourceChangeDetail {
     /// The group to which the CausingEntity value belongs.
     ///
+    /// This will not be present if the change source cannot be described by CloudFormation's
+    /// limited vocabulary, such as tags supplied when creating a change set.
+    ///
     /// See [`ChangeSource`] for more information.
-    pub change_source: ChangeSource,
+    pub change_source: Option<ChangeSource>,
 
     /// Indicates whether AWS CloudFormation can determine the target value, and whether the target
     /// value will change before you execute a change set.
@@ -429,14 +432,12 @@ pub struct ResourceChangeDetail {
 
 impl ResourceChangeDetail {
     fn from_raw(details: rusoto_cloudformation::ResourceChangeDetail) -> Self {
+        let causing_entity = details.causing_entity;
         Self {
-            change_source: ChangeSource::from_raw(
-                details
-                    .change_source
-                    .as_deref()
-                    .expect("ResourceChangeDetail without change_source"),
-                details.causing_entity,
-            ),
+            change_source: details
+                .change_source
+                .as_deref()
+                .map(move |change_source| ChangeSource::from_raw(change_source, causing_entity)),
             evaluation: details
                 .evaluation
                 .expect("ResourceChangeDetail without evaluation")
@@ -583,7 +584,8 @@ impl ResourceTargetDefinition {
                     attribute
                 );
                 assert!(
-                    target.requires_recreation.is_none(),
+                    // We assume that changes to these attributes would never require recreation.
+                    matches!(target.requires_recreation.as_deref(), None | Some("Never")),
                     "ResourceTargetDefinition with attribute {:?} with requires_recreation",
                     attribute
                 );
