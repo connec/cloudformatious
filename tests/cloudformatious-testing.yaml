@@ -29,7 +29,6 @@ Resources:
           - Sid: SubnetOperations1
             Effect: Allow
             Action:
-              - ec2:CreateTags
               - ec2:DeleteSubnet
             Resource: '*'
             Condition:
@@ -38,8 +37,9 @@ Resources:
           - Sid: SubnetOperations2
             Effect: Allow
             Action:
+              - ec2:CreateTags
               - ec2:DescribeSubnets
-            Resource: '*' # There is no way of restricting this operation to just our subnets
+            Resource: '*' # There is no way of restricting these operations to just our subnets
 
   Vpc:
     Type: AWS::EC2::VPC

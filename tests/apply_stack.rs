@@ -256,23 +256,20 @@ async fn create_stack_fut_err() -> Result<(), Box<dyn std::error::Error>> {
     {
         assert_eq!(stack_status, StackStatus::RollbackComplete);
         assert!(stack_status_reason.contains("resource(s) failed to create: [Vpc]"));
-        assert_eq!(
-            resource_events
-                .iter()
-                .map(|(status, details)| {
-                    (
-                        details.logical_resource_id(),
-                        *status,
-                        details.resource_status_reason().inner(),
-                    )
-                })
-                .collect::<Vec<_>>(),
-            vec![(
-                "Vpc",
-                ResourceStatus::CreateFailed,
-                Some("Property CidrBlock cannot be empty.")
-            )]
-        );
+        let resource_errors = resource_events
+            .iter()
+            .map(|(status, details)| {
+                (
+                    details.logical_resource_id(),
+                    *status,
+                    details.resource_status_reason().inner(),
+                )
+            })
+            .collect::<Vec<_>>();
+        assert!(matches!(
+            &resource_errors[..],
+            [("Vpc", ResourceStatus::CreateFailed, Some(_))]
+        ));
     } else {
         return Err(error.into());
     }
@@ -306,6 +303,7 @@ async fn create_stack_stream_err() -> Result<(), Box<dyn std::error::Error>> {
         events,
         vec![
             (stack_name.clone(), "CREATE_IN_PROGRESS".to_string()),
+            ("Vpc".to_string(), "CREATE_IN_PROGRESS".to_string()),
             ("Vpc".to_string(), "CREATE_FAILED".to_string()),
             (stack_name.clone(), "ROLLBACK_IN_PROGRESS".to_string()),
             ("Vpc".to_string(), "DELETE_COMPLETE".to_string()),
@@ -321,23 +319,20 @@ async fn create_stack_stream_err() -> Result<(), Box<dyn std::error::Error>> {
     {
         assert_eq!(stack_status, StackStatus::RollbackComplete);
         assert!(stack_status_reason.contains("resource(s) failed to create: [Vpc]"));
-        assert_eq!(
-            resource_events
-                .iter()
-                .map(|(status, details)| {
-                    (
-                        details.logical_resource_id(),
-                        *status,
-                        details.resource_status_reason().inner(),
-                    )
-                })
-                .collect::<Vec<_>>(),
-            vec![(
-                "Vpc",
-                ResourceStatus::CreateFailed,
-                Some("Property CidrBlock cannot be empty.")
-            )]
-        );
+        let resource_errors = resource_events
+            .iter()
+            .map(|(status, details)| {
+                (
+                    details.logical_resource_id(),
+                    *status,
+                    details.resource_status_reason().inner(),
+                )
+            })
+            .collect::<Vec<_>>();
+        assert!(matches!(
+            &resource_errors[..],
+            [("Vpc", ResourceStatus::CreateFailed, Some(_))]
+        ));
     } else {
         return Err(error.into());
     }
@@ -382,23 +377,20 @@ async fn update_stack_fut_err() -> Result<(), Box<dyn std::error::Error>> {
     {
         assert_eq!(stack_status, StackStatus::UpdateRollbackComplete);
         assert!(stack_status_reason.contains("resource(s) failed to create: [Vpc]"));
-        assert_eq!(
-            resource_events
-                .iter()
-                .map(|(status, details)| {
-                    (
-                        details.logical_resource_id(),
-                        *status,
-                        details.resource_status_reason().inner(),
-                    )
-                })
-                .collect::<Vec<_>>(),
-            vec![(
-                "Vpc",
-                ResourceStatus::CreateFailed,
-                Some("Property CidrBlock cannot be empty.")
-            )]
-        );
+        let resource_errors = resource_events
+            .iter()
+            .map(|(status, details)| {
+                (
+                    details.logical_resource_id(),
+                    *status,
+                    details.resource_status_reason().inner(),
+                )
+            })
+            .collect::<Vec<_>>();
+        assert!(matches!(
+            &resource_errors[..],
+            [("Vpc", ResourceStatus::CreateFailed, Some(_))]
+        ));
     } else {
         return Err(error.into());
     }
