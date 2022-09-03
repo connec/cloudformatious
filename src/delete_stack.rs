@@ -90,6 +90,7 @@ impl DeleteStackInput {
     /// Set the value for `client_request_token`.
     ///
     /// **Note:** this consumes and returns `self` for chaining.
+    #[must_use]
     pub fn set_client_request_token(mut self, client_request_token: impl Into<String>) -> Self {
         self.client_request_token = Some(client_request_token.into());
         self
@@ -98,6 +99,7 @@ impl DeleteStackInput {
     /// Set the value for `client_request_token`.
     ///
     /// **Note:** this consumes and returns `self` for chaining.
+    #[must_use]
     pub fn set_retain_resources<I, S>(mut self, retain_resources: I) -> Self
     where
         I: Into<Vec<S>>,
@@ -116,6 +118,7 @@ impl DeleteStackInput {
     /// Set the value for `role_arn`.
     ///
     /// **Note:** this consumes and returns `self` for chaining.
+    #[must_use]
     pub fn set_role_arn(mut self, role_arn: impl Into<String>) -> Self {
         self.role_arn = Some(role_arn.into());
         self

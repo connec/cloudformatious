@@ -214,9 +214,11 @@ pub struct ResourceChange {
 
 impl ResourceChange {
     fn from_raw(change: Change) -> Self {
-        if change.type_.as_deref() != Some("Resource") {
-            panic!("Change with unexpected type_ {:?}", change.type_);
-        }
+        assert!(
+            change.type_.as_deref() == Some("Resource"),
+            "Change with unexpected type_ {:?}",
+            change.type_
+        );
         let change = change
             .resource_change
             .expect("Change without resource_change");
