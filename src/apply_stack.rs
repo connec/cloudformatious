@@ -154,6 +154,7 @@ impl ApplyStackInput {
     /// Set the value for `capabilities`.
     ///
     /// **Note:** this consumes and returns `self` for chaining.
+    #[must_use]
     pub fn set_capabilities(mut self, capabilities: impl Into<Vec<Capability>>) -> Self {
         self.capabilities = capabilities.into();
         self
@@ -162,6 +163,7 @@ impl ApplyStackInput {
     /// Set the value for `client_request_token`.
     ///
     /// **Note:** this consumes and returns `self` for chaining.
+    #[must_use]
     pub fn set_client_request_token(mut self, client_request_token: impl Into<String>) -> Self {
         self.client_request_token = Some(client_request_token.into());
         self
@@ -170,6 +172,7 @@ impl ApplyStackInput {
     /// Set the value for `notification_arns`.
     ///
     /// **Note:** this consumes and returns `self` for chaining.
+    #[must_use]
     pub fn set_notification_arns<I, S>(mut self, notification_arns: I) -> Self
     where
         I: Into<Vec<S>>,
@@ -186,6 +189,7 @@ impl ApplyStackInput {
     /// Set the value for `parameters`.
     ///
     /// **Note:** this consumes and returns `self` for chaining.
+    #[must_use]
     pub fn set_parameters(mut self, parameters: impl Into<Vec<Parameter>>) -> Self {
         self.parameters = parameters.into();
         self
@@ -194,6 +198,7 @@ impl ApplyStackInput {
     /// Set the value for `resource_types`.
     ///
     /// **Note:** this consumes and returns `self` for chaining.
+    #[must_use]
     pub fn set_resource_types<I, S>(mut self, resource_types: I) -> Self
     where
         I: Into<Vec<S>>,
@@ -206,6 +211,7 @@ impl ApplyStackInput {
     /// Set the value for `role_arn`.
     ///
     /// **Note:** this consumes and returns `self` for chaining.
+    #[must_use]
     pub fn set_role_arn(mut self, role_arn: impl Into<String>) -> Self {
         self.role_arn = Some(role_arn.into());
         self
@@ -214,6 +220,7 @@ impl ApplyStackInput {
     /// Set the value for `tags`.
     ///
     /// **Note:** this consumes and returns `self` for chaining.
+    #[must_use]
     pub fn set_tags(mut self, tags: impl Into<Vec<Tag>>) -> Self {
         self.tags = tags.into();
         self
@@ -459,7 +466,7 @@ impl ApplyStackOutput {
 }
 
 /// An output from an `apply_stack` operation.
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Eq, PartialEq)]
 pub struct StackOutput {
     /// User defined description associated with the output.
     pub description: Option<String>,
@@ -691,8 +698,9 @@ impl Future for ApplyStack<'_> {
                             .expect("end of stream without err or output"),
                     )
                 }
-                task::Poll::Ready(Some(Ok(ApplyStackEvent::ChangeSet(_))))
-                | task::Poll::Ready(Some(Ok(ApplyStackEvent::Event(_)))) => continue,
+                task::Poll::Ready(Some(Ok(
+                    ApplyStackEvent::ChangeSet(_) | ApplyStackEvent::Event(_),
+                ))) => continue,
                 task::Poll::Ready(Some(Ok(ApplyStackEvent::Output(output)))) => {
                     self.output.replace(Ok(output));
                     continue;
