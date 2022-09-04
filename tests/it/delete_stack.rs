@@ -1,5 +1,3 @@
-pub mod common;
-
 use futures_util::StreamExt;
 use rusoto_cloudformation::DescribeStacksInput;
 
@@ -7,7 +5,7 @@ use cloudformatious::{
     ApplyStackInput, CloudFormatious, DeleteStackInput, Parameter, TemplateSource,
 };
 
-use common::{generated_name, get_client, EMPTY_TEMPLATE, NON_EMPTY_TEMPLATE};
+use crate::common::{generated_name, get_client, EMPTY_TEMPLATE, NON_EMPTY_TEMPLATE};
 
 #[tokio::test]
 async fn delete_stack_fut_ok() -> Result<(), Box<dyn std::error::Error>> {

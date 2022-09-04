@@ -1,5 +1,3 @@
-pub mod common;
-
 use enumset::EnumSet;
 use rusoto_cloudformation::Tag;
 
@@ -11,7 +9,7 @@ use cloudformatious::{
     ApplyStackInput, CloudFormatious, Parameter, TemplateSource,
 };
 
-use common::{clean_up, generated_name, get_client, NON_EMPTY_TEMPLATE};
+use crate::common::{clean_up, generated_name, get_client, NON_EMPTY_TEMPLATE};
 
 #[tokio::test]
 async fn changes_tags_only() -> Result<(), Box<dyn std::error::Error>> {
