@@ -1,7 +1,7 @@
 use std::{env, time::Duration};
 
 use rusoto_cloudformation::CloudFormationClient;
-use rusoto_core::HttpClient;
+use rusoto_core::{HttpClient, Region};
 use rusoto_credential::{AutoRefreshingProvider, ChainProvider};
 
 const NAME_PREFIX: &str = "cloudformatious-testing-";
@@ -46,7 +46,32 @@ pub const NON_EMPTY_TEMPLATE: &str = r#"{
     }
 }"#;
 
+pub const MISSING_PERMISSION_1_TEMPLATE: &str = r#"{
+    "Resources": {
+        "Bucket": {
+            "Type": "AWS::S3::Bucket",
+            "Properties": {}
+        }
+    }
+}"#;
+
+pub const MISSING_PERMISSION_2_TEMPLATE: &str = r#"{
+  "Resources": {
+    "Fs": {
+      "Type": "AWS::EFS::FileSystem",
+      "Properties": {}
+    }
+  }
+}"#;
+
 pub fn get_client() -> CloudFormationClient {
+    get_arbitrary_client(CloudFormationClient::new_with)
+}
+
+pub fn get_arbitrary_client<F, T>(f: F) -> T
+where
+    F: FnOnce(HttpClient, AutoRefreshingProvider<ChainProvider>, Region) -> T,
+{
     let client = HttpClient::new().unwrap();
 
     let mut credentials = AutoRefreshingProvider::new(ChainProvider::new()).unwrap();
@@ -55,7 +80,7 @@ pub fn get_client() -> CloudFormationClient {
     let region = env::var("AWS_REGION").expect("You must set AWS_REGION to run these tests");
     let region = region.parse().expect("Invalid AWS region");
 
-    CloudFormationClient::new_with(client, credentials, region)
+    f(client, credentials, region)
 }
 
 pub fn generated_name() -> String {
