@@ -1,5 +1,3 @@
-pub mod common;
-
 use futures_util::StreamExt;
 
 use cloudformatious::{
@@ -8,7 +6,7 @@ use cloudformatious::{
     StackFailure, StackStatus, TemplateSource,
 };
 
-use common::{clean_up, generated_name, get_client, EMPTY_TEMPLATE};
+use crate::common::{clean_up, generated_name, get_client, EMPTY_TEMPLATE};
 
 const FAILING_TEMPLATE: &str = r#"
             {
