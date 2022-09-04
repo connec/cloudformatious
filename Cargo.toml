@@ -17,7 +17,9 @@ memmem = "0.1.1"
 regex = "1.5.4"
 rusoto_cloudformation = "0.46.0"
 rusoto_core = "0.46.0"
+rusoto_sts = "0.46"
 serde = { version = "1.0.125", features = ["derive"] }
+serde_json = "1.0.85"
 serde_plain = "0.3.0"
 tokio = { version = "1.4.0", features = ["time"] }
 
@@ -25,4 +27,3 @@ tokio = { version = "1.4.0", features = ["time"] }
 assert_matches = "1.5.0"
 fastrand = "1.4.0"
 rusoto_credential = "0.46.0"
-rusoto_sts = "0.46"

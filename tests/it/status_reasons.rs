@@ -7,8 +7,8 @@ use cloudformatious::{
 };
 
 use crate::common::{
-    clean_up, generated_name, get_arbitrary_client, get_client, MISSING_PERMISSION_1_TEMPLATE,
-    MISSING_PERMISSION_2_TEMPLATE,
+    clean_up, generated_name, get_arbitrary_client, get_client, AUTHORIZATION_FAILURE_TEMPLATE,
+    MISSING_PERMISSION_1_TEMPLATE, MISSING_PERMISSION_2_TEMPLATE,
 };
 
 #[tokio::test]
@@ -38,6 +38,7 @@ async fn status_reason_missing_permission_no_principal() -> Result<(), Box<dyn s
 
     assert_eq!(missing_permission.permission, "s3:CreateBucket");
     assert_eq!(missing_permission.principal, None);
+    assert!(missing_permission.encoded_authorization_message.is_none());
 
     clean_up(&client, stack_name).await?;
 
@@ -81,6 +82,41 @@ async fn status_reason_missing_permission_with_principal() -> Result<(), Box<dyn
         "elasticfilesystem:CreateFileSystem"
     );
     assert_eq!(missing_permission.principal, identity.arn.as_deref());
+    assert!(missing_permission.encoded_authorization_message.is_none());
+
+    clean_up(&client, stack_name).await?;
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn status_reason_authorization_failure() -> Result<(), Box<dyn std::error::Error>> {
+    let client = get_client();
+
+    let stack_name = generated_name();
+    let input = ApplyStackInput::new(
+        &stack_name,
+        TemplateSource::inline(AUTHORIZATION_FAILURE_TEMPLATE),
+    );
+    let error = client.apply_stack(input).await.unwrap_err();
+
+    let failure = assert_matches!(error, ApplyStackError::Failure(failure) => failure);
+    assert_eq!(failure.stack_status, StackStatus::RollbackComplete);
+
+    let status_reason = assert_matches!(
+        &failure.resource_events[..],
+        [(ResourceStatus::CreateFailed, status)] if status.logical_resource_id() == "Vpc" => {
+            status.resource_status_reason()
+        }
+    );
+    let encoded_message = assert_matches!(
+      status_reason.detail(),
+      Some(StatusReasonDetail::AuthorizationFailure(m)) => m
+    );
+
+    let sts_client = get_arbitrary_client(StsClient::new_with);
+    let decoded_message = encoded_message.decode(&sts_client).await?;
+    assert_eq!(decoded_message["context"]["action"], "ec2:CreateVpc");
 
     clean_up(&client, stack_name).await?;
 
