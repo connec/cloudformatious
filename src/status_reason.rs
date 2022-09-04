@@ -58,7 +58,7 @@ impl<'a> StatusReasonDetail<'a> {
                 Regex::new(r"(?i)Resource creation cancelled").unwrap();
 
             static ref MISSING_PERMISSION_1: Regex =
-                Regex::new(r"(?i)API: (?P<permission>[a-z0-9]+:[a-z0-9]+) You are not authorized to perform this operation").unwrap();
+                Regex::new(r"(?i)API: (?P<permission>[a-z0-9]+:[a-z0-9]+)\b").unwrap();
 
             static ref MISSING_PERMISSION_2: Regex =
                 Regex::new(r"(?i)User: (?P<principal>[a-z0-9:/-]+) is not authorized to perform: (?P<permission>[a-z0-9]+:[a-z0-9]+)").unwrap();
@@ -151,6 +151,15 @@ mod tests {
             StatusReasonDetail::new(example),
             Some(StatusReasonDetail::MissingPermission(MissingPermission {
                 permission: "ec2:ModifyVpcAttribute",
+                principal: None,
+            }))
+        );
+
+        let example = r#"API: s3:CreateBucket Access Denied"#;
+        assert_eq!(
+            StatusReasonDetail::new(example),
+            Some(StatusReasonDetail::MissingPermission(MissingPermission {
+                permission: "s3:CreateBucket",
                 principal: None,
             }))
         );
