@@ -64,6 +64,17 @@ pub const MISSING_PERMISSION_2_TEMPLATE: &str = r#"{
   }
 }"#;
 
+pub const AUTHORIZATION_FAILURE_TEMPLATE: &str = r#"{
+  "Resources": {
+    "Vpc": {
+      "Type": "AWS::EC2::VPC",
+      "Properties": {
+        "CidrBlock": "0.0.0.0/16"
+      }
+    }
+  }
+}"#;
+
 pub fn get_client() -> CloudFormationClient {
     get_arbitrary_client(CloudFormationClient::new_with)
 }
