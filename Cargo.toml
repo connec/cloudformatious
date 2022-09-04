@@ -22,5 +22,7 @@ serde_plain = "0.3.0"
 tokio = { version = "1.4.0", features = ["time"] }
 
 [dev-dependencies]
+assert_matches = "1.5.0"
 fastrand = "1.4.0"
 rusoto_credential = "0.46.0"
+rusoto_sts = "0.46"
