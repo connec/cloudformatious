@@ -75,6 +75,32 @@ pub const AUTHORIZATION_FAILURE_TEMPLATE: &str = r#"{
   }
 }"#;
 
+pub const SECRETS_MANAGER_SECRET: &str = r#"{
+    "Parameters": {
+        "TagValue": {
+            "Type": "String"
+        }
+    },
+    "Resources": {
+        "Secret": {
+            "Type": "AWS::SecretsManager::Secret",
+            "Properties": {
+                "Name": {
+                    "Ref": "AWS::StackName"
+                },
+                "Tags": [
+                    {
+                        "Key": "Key",
+                        "Value": {
+                            "Ref": "TagValue"
+                        }
+                    }
+                ]
+            }
+        }
+    }
+}"#;
+
 pub fn get_client() -> CloudFormationClient {
     get_arbitrary_client(CloudFormationClient::new_with)
 }

@@ -9,7 +9,9 @@ use cloudformatious::{
     ApplyStackInput, CloudFormatious, Parameter, TemplateSource,
 };
 
-use crate::common::{clean_up, generated_name, get_client, NON_EMPTY_TEMPLATE};
+use crate::common::{
+    clean_up, generated_name, get_client, NON_EMPTY_TEMPLATE, SECRETS_MANAGER_SECRET,
+};
 
 #[tokio::test]
 async fn changes_tags_only() -> Result<(), Box<dyn std::error::Error>> {
@@ -52,6 +54,44 @@ async fn changes_tags_only() -> Result<(), Box<dyn std::error::Error>> {
             resource_type: "AWS::EC2::Subnet".to_string(),
         }]
     );
+
+    clean_up(&client, stack_name).await?;
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn secrets_manager_secret_tags_only() -> Result<(), Box<dyn std::error::Error>> {
+    let client = get_client();
+
+    let stack_name = generated_name();
+    let mut input =
+        ApplyStackInput::new(&stack_name, TemplateSource::inline(SECRETS_MANAGER_SECRET))
+            .set_parameters([Parameter {
+                key: "TagValue".to_string(),
+                value: "a".to_string(),
+            }]);
+
+    client.apply_stack(input.clone()).await?;
+
+    input.parameters[0].value = "b".to_string();
+    let change_set = client.apply_stack(input).change_set().await?;
+
+    let targets: Vec<_> = change_set
+        .changes
+        .into_iter()
+        .filter_map(|change| match change.action {
+            Action::Modify(details) => {
+                Some(details.details.into_iter().map(|detail| detail.target))
+            }
+            _ => None,
+        })
+        .flatten()
+        .collect();
+    assert!(!targets.is_empty());
+    assert!(targets
+        .iter()
+        .all(|target| matches!(target, ResourceTargetDefinition::Tags)));
 
     clean_up(&client, stack_name).await?;
 

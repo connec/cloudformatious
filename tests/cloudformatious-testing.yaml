@@ -40,6 +40,13 @@ Resources:
               - ec2:CreateTags
               - ec2:DescribeSubnets
             Resource: '*' # There is no way of restricting these operations to just our subnets
+          - Sid: SecretsManagerOperations
+            Effect: Allow
+            Action:
+              - secretsmanager:CreateSecret
+              - secretsmanager:DeleteSecret
+              - secretsmanager:TagResource
+            Resource: !Sub arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:cloudformatious-testing-*
           - Sid: DecodeAuthorizationMessage
             Effect: Allow
             Action:
