@@ -222,8 +222,12 @@ impl ResourceChange {
         let change = change
             .resource_change
             .expect("Change without resource_change");
+        let resource_type = change
+            .resource_type
+            .expect("ResourceChange without resource_type");
         Self {
             action: Action::from_raw(
+                &resource_type,
                 change
                     .action
                     .as_deref()
@@ -236,9 +240,7 @@ impl ResourceChange {
                 .logical_resource_id
                 .expect("ResourceChange without logical_resource_id"),
             physical_resource_id: change.physical_resource_id,
-            resource_type: change
-                .resource_type
-                .expect("ResourceChange without resource_type"),
+            resource_type,
         }
     }
 }
@@ -264,6 +266,7 @@ pub enum Action {
 
 impl Action {
     fn from_raw(
+        resource_type: &str,
         action: &str,
         details: Option<Vec<rusoto_cloudformation::ResourceChangeDetail>>,
         replacement: Option<String>,
@@ -295,6 +298,7 @@ impl Action {
                 }
             }
             "Modify" => Self::Modify(ModifyDetail::from_raw(
+                resource_type,
                 details.expect("ResourceChange with action \"Modify\" without details"),
                 &replacement.expect("ResourceChange with action \"Modify\" without replacement"),
                 &scope.expect("ResourceChange with action \"Modify\" without scope"),
@@ -321,6 +325,7 @@ pub struct ModifyDetail {
 
 impl ModifyDetail {
     fn from_raw(
+        resource_type: &str,
         details: Vec<rusoto_cloudformation::ResourceChangeDetail>,
         replacement: &str,
         scope: &[String],
@@ -328,7 +333,7 @@ impl ModifyDetail {
         Self {
             details: details
                 .into_iter()
-                .map(ResourceChangeDetail::from_raw)
+                .map(|detail| ResourceChangeDetail::from_raw(resource_type, detail))
                 .collect(),
             replacement: replacement
                 .parse()
@@ -433,7 +438,7 @@ pub struct ResourceChangeDetail {
 }
 
 impl ResourceChangeDetail {
-    fn from_raw(details: rusoto_cloudformation::ResourceChangeDetail) -> Self {
+    fn from_raw(resource_type: &str, details: rusoto_cloudformation::ResourceChangeDetail) -> Self {
         let causing_entity = details.causing_entity;
         Self {
             change_source: details
@@ -446,6 +451,7 @@ impl ResourceChangeDetail {
                 .parse()
                 .expect("ResourceChangeDetail with invalid evaluation"),
             target: ResourceTargetDefinition::from_raw(
+                resource_type,
                 details.target.expect("ResourceChangeDetail without target"),
             ),
         }
@@ -568,7 +574,10 @@ pub enum ResourceTargetDefinition {
 }
 
 impl ResourceTargetDefinition {
-    fn from_raw(target: rusoto_cloudformation::ResourceTargetDefinition) -> Self {
+    fn from_raw(
+        resource_type: &str,
+        target: rusoto_cloudformation::ResourceTargetDefinition,
+    ) -> Self {
         let attribute = target
             .attribute
             .expect("ResourceTargetDefinition without attribute");
@@ -587,7 +596,10 @@ impl ResourceTargetDefinition {
                 );
                 assert!(
                     // We assume that changes to these attributes would never require recreation.
-                    matches!(target.requires_recreation.as_deref(), None | Some("Never")),
+                    // NOTE: CloudFormation may report tag changes on AWS::SecretsManager::Secret
+                    // resources as conditionally requiring recreation. We assume this is a bug in
+                    // CloudFormation and ignore it.
+                    matches!(target.requires_recreation.as_deref(), None | Some("Never")) || resource_type == "AWS::SecretsManager::Secret",
                     "ResourceTargetDefinition with attribute {:?} with requires_recreation",
                     attribute
                 );
