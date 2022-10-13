@@ -2,8 +2,8 @@ use futures_util::StreamExt;
 
 use cloudformatious::{
     change_set::{Action, ExecutionStatus},
-    ApplyStackError, ApplyStackInput, ChangeSetStatus, CloudFormatious, ResourceStatus,
-    StackFailure, StackStatus, TemplateSource,
+    ApplyStackError, ApplyStackInput, ChangeSetStatus, ResourceStatus, StackFailure, StackStatus,
+    TemplateSource,
 };
 
 use crate::common::{clean_up, generated_name, get_client, EMPTY_TEMPLATE};
@@ -21,21 +21,21 @@ const FAILING_TEMPLATE: &str = r#"
 
 #[tokio::test]
 async fn create_stack_fut_ok() -> Result<(), Box<dyn std::error::Error>> {
-    let client = get_client();
+    let client = get_client().await;
 
     let stack_name = generated_name();
     let input = ApplyStackInput::new(&stack_name, TemplateSource::inline(EMPTY_TEMPLATE));
     let output = client.apply_stack(input).await?;
     assert_eq!(output.stack_status, StackStatus::CreateComplete);
 
-    clean_up(&client, stack_name).await?;
+    clean_up(stack_name).await?;
 
     Ok(())
 }
 
 #[tokio::test]
 async fn create_stack_change_set_ok() -> Result<(), Box<dyn std::error::Error>> {
-    let client = get_client();
+    let client = get_client().await;
 
     let stack_name = generated_name();
     let input = ApplyStackInput::new(&stack_name, TemplateSource::inline(EMPTY_TEMPLATE));
@@ -49,14 +49,14 @@ async fn create_stack_change_set_ok() -> Result<(), Box<dyn std::error::Error>> 
     let output = stack.await?;
     assert_eq!(output.stack_status, StackStatus::CreateComplete);
 
-    clean_up(&client, stack_name).await?;
+    clean_up(stack_name).await?;
 
     Ok(())
 }
 
 #[tokio::test]
 async fn create_stack_change_set_cancel() -> Result<(), Box<dyn std::error::Error>> {
-    let client = get_client();
+    let client = get_client().await;
 
     let stack_name = generated_name();
     let input = ApplyStackInput::new(&stack_name, TemplateSource::inline(FAILING_TEMPLATE));
@@ -79,14 +79,14 @@ async fn create_stack_change_set_cancel() -> Result<(), Box<dyn std::error::Erro
         .collect();
     assert_eq!(changes, vec![(&Action::Add, "Vpc", "AWS::EC2::VPC")]);
 
-    clean_up(&client, stack_name).await?;
+    clean_up(stack_name).await?;
 
     Ok(())
 }
 
 #[tokio::test]
 async fn create_stack_change_set_cancel_idempotent() -> Result<(), Box<dyn std::error::Error>> {
-    let client = get_client();
+    let client = get_client().await;
 
     let stack_name = generated_name();
 
@@ -130,14 +130,14 @@ async fn create_stack_change_set_cancel_idempotent() -> Result<(), Box<dyn std::
         .collect();
     assert_eq!(changes, vec![(&Action::Add, "Vpc", "AWS::EC2::VPC")]);
 
-    clean_up(&client, stack_name).await?;
+    clean_up(stack_name).await?;
 
     Ok(())
 }
 
 #[tokio::test]
 async fn create_stack_stream_ok() -> Result<(), Box<dyn std::error::Error>> {
-    let client = get_client();
+    let client = get_client().await;
 
     let stack_name = generated_name();
     let input = ApplyStackInput::new(&stack_name, TemplateSource::inline(EMPTY_TEMPLATE));
@@ -164,14 +164,14 @@ async fn create_stack_stream_ok() -> Result<(), Box<dyn std::error::Error>> {
         ]
     );
 
-    clean_up(&client, stack_name).await?;
+    clean_up(stack_name).await?;
 
     Ok(())
 }
 
 #[tokio::test]
 async fn create_stack_change_set_and_stream_ok() -> Result<(), Box<dyn std::error::Error>> {
-    let client = get_client();
+    let client = get_client().await;
 
     let stack_name = generated_name();
     let input = ApplyStackInput::new(&stack_name, TemplateSource::inline(EMPTY_TEMPLATE));
@@ -203,14 +203,14 @@ async fn create_stack_change_set_and_stream_ok() -> Result<(), Box<dyn std::erro
         ]
     );
 
-    clean_up(&client, stack_name).await?;
+    clean_up(stack_name).await?;
 
     Ok(())
 }
 
 #[tokio::test]
 async fn apply_overall_idempotent() -> Result<(), Box<dyn std::error::Error>> {
-    let client = get_client();
+    let client = get_client().await;
 
     let stack_name = generated_name();
     let input = ApplyStackInput::new(&stack_name, TemplateSource::inline(EMPTY_TEMPLATE));
@@ -233,14 +233,14 @@ async fn apply_overall_idempotent() -> Result<(), Box<dyn std::error::Error>> {
     assert_eq!(output2.stack_status, StackStatus::CreateComplete);
     assert_eq!(output1, output2);
 
-    clean_up(&client, stack_name).await?;
+    clean_up(stack_name).await?;
 
     Ok(())
 }
 
 #[tokio::test]
 async fn create_stack_fut_err() -> Result<(), Box<dyn std::error::Error>> {
-    let client = get_client();
+    let client = get_client().await;
 
     let stack_name = generated_name();
     let input = ApplyStackInput::new(&stack_name, TemplateSource::inline(FAILING_TEMPLATE));
@@ -272,14 +272,14 @@ async fn create_stack_fut_err() -> Result<(), Box<dyn std::error::Error>> {
         return Err(error.into());
     }
 
-    clean_up(&client, stack_name).await?;
+    clean_up(stack_name).await?;
 
     Ok(())
 }
 
 #[tokio::test]
 async fn create_stack_stream_err() -> Result<(), Box<dyn std::error::Error>> {
-    let client = get_client();
+    let client = get_client().await;
 
     let stack_name = generated_name();
     let input = ApplyStackInput::new(&stack_name, TemplateSource::inline(FAILING_TEMPLATE));
@@ -335,14 +335,14 @@ async fn create_stack_stream_err() -> Result<(), Box<dyn std::error::Error>> {
         return Err(error.into());
     }
 
-    clean_up(&client, stack_name).await?;
+    clean_up(stack_name).await?;
 
     Ok(())
 }
 
 #[tokio::test]
 async fn create_change_set_fut_err() -> Result<(), Box<dyn std::error::Error>> {
-    let client = get_client();
+    let client = get_client().await;
 
     let stack_name = generated_name();
     let input = ApplyStackInput::new(&stack_name, TemplateSource::inline(""));
@@ -357,7 +357,7 @@ async fn create_change_set_fut_err() -> Result<(), Box<dyn std::error::Error>> {
 
 #[tokio::test]
 async fn update_stack_fut_err() -> Result<(), Box<dyn std::error::Error>> {
-    let client = get_client();
+    let client = get_client().await;
 
     let stack_name = generated_name();
     let input = ApplyStackInput::new(&stack_name, TemplateSource::inline(EMPTY_TEMPLATE));
@@ -393,7 +393,7 @@ async fn update_stack_fut_err() -> Result<(), Box<dyn std::error::Error>> {
         return Err(error.into());
     }
 
-    clean_up(&client, stack_name).await?;
+    clean_up(stack_name).await?;
 
     Ok(())
 }

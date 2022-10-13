@@ -9,7 +9,7 @@ mod status;
 pub mod change_set;
 pub mod status_reason;
 
-use rusoto_cloudformation::{CloudFormation, CloudFormationClient};
+use aws_config::SdkConfig;
 
 pub use apply_stack::{
     ApplyStack, ApplyStackChangeSet, ApplyStackError, ApplyStackEvents, ApplyStackInput,
@@ -22,8 +22,20 @@ pub use status::{
     ChangeSetStatus, InvalidStatus, ResourceStatus, StackStatus, Status, StatusSentiment,
 };
 
-/// High-level CloudFormation operations.
-pub trait CloudFormatious: CloudFormation + Sized + private::Sealed {
+/// A client for performing cloudformatious operations.
+pub struct Client {
+    inner: aws_sdk_cloudformation::Client,
+}
+
+impl Client {
+    /// Construct a new client for the given AWS SDK configuration.
+    #[must_use]
+    pub fn new(config: &SdkConfig) -> Self {
+        Self {
+            inner: aws_sdk_cloudformation::Client::new(config),
+        }
+    }
+
     /// Apply a CloudFormation stack to an AWS environment.
     ///
     /// This is an idempotent operation that will create the indicated stack if it doesn't exist, or
@@ -35,8 +47,9 @@ pub trait CloudFormatious: CloudFormation + Sized + private::Sealed {
     /// The returned `Future` can be used to simply wait for the operation to complete. You can also
     /// use [`ApplyStack::events`] to get a `Stream` of the stack events that occur during the
     /// operation. See [`ApplyStack`] for more details.
-    fn apply_stack(&self, input: ApplyStackInput) -> ApplyStack {
-        ApplyStack::new(self, input)
+    #[must_use]
+    pub fn apply_stack(&self, input: ApplyStackInput) -> ApplyStack {
+        ApplyStack::new(&self.inner, input)
     }
 
     /// Delete a CloudFormation stack from an AWS environment.
@@ -44,24 +57,13 @@ pub trait CloudFormatious: CloudFormation + Sized + private::Sealed {
     /// This is an idempotent operation that will delete the indicated stack if it exists, or do
     /// nothing if it does not.
     ///
-    /// The returned `Future` will behave exactly like [`CloudFormation::delete_stack`], however
     /// [`DeleteStack::events`] can be used to get a `Stream` of `StackEvent`s that occur during
     /// deletion (the stream will be empty if the stack does not exist). See the [`DeleteStack`]
     /// struct for more details.
-    fn delete_stack(&self, input: DeleteStackInput) -> DeleteStack {
-        DeleteStack::new(self, input)
+    #[must_use]
+    pub fn delete_stack(&self, input: DeleteStackInput) -> DeleteStack {
+        DeleteStack::new(&self.inner, input)
     }
-}
-
-impl CloudFormatious for CloudFormationClient {}
-
-mod private {
-    use rusoto_cloudformation::CloudFormationClient;
-
-    /// An unreachable trait used to prevent some traits from being implemented outside the crate.
-    pub trait Sealed {}
-
-    impl Sealed for CloudFormationClient {}
 }
 
 #[cfg(doctest)]

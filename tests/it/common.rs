@@ -1,8 +1,4 @@
-use std::{env, time::Duration};
-
-use rusoto_cloudformation::CloudFormationClient;
-use rusoto_core::{HttpClient, Region};
-use rusoto_credential::{AutoRefreshingProvider, ChainProvider};
+use cloudformatious::Client;
 
 const NAME_PREFIX: &str = "cloudformatious-testing-";
 
@@ -101,41 +97,28 @@ pub const SECRETS_MANAGER_SECRET: &str = r#"{
     }
 }"#;
 
-pub fn get_client() -> CloudFormationClient {
-    get_arbitrary_client(CloudFormationClient::new_with)
+pub async fn get_client() -> Client {
+    let config = aws_config::load_from_env().await;
+    Client::new(&config)
 }
 
-pub fn get_arbitrary_client<F, T>(f: F) -> T
-where
-    F: FnOnce(HttpClient, AutoRefreshingProvider<ChainProvider>, Region) -> T,
-{
-    let client = HttpClient::new().unwrap();
-
-    let mut credentials = AutoRefreshingProvider::new(ChainProvider::new()).unwrap();
-    credentials.get_mut().set_timeout(Duration::from_secs(1));
-
-    let region = env::var("AWS_REGION").expect("You must set AWS_REGION to run these tests");
-    let region = region.parse().expect("Invalid AWS region");
-
-    f(client, credentials, region)
+pub async fn get_sts_client() -> aws_sdk_sts::Client {
+    let config = aws_config::load_from_env().await;
+    aws_sdk_sts::Client::new(&config)
 }
 
 pub fn generated_name() -> String {
     format!("{}{}", NAME_PREFIX, fastrand::u32(..))
 }
 
-pub async fn clean_up(
-    client: &CloudFormationClient,
-    stack_name: String,
-) -> Result<(), Box<dyn std::error::Error>> {
-    use rusoto_cloudformation::{CloudFormation, DeleteStackInput};
-    CloudFormation::delete_stack(
-        client,
-        DeleteStackInput {
-            stack_name,
-            ..DeleteStackInput::default()
-        },
-    )
-    .await
-    .map_err(Into::into)
+pub async fn clean_up(stack_name: String) -> Result<(), Box<dyn std::error::Error>> {
+    let config = aws_config::load_from_env().await;
+    let client = aws_sdk_cloudformation::Client::new(&config);
+    client
+        .delete_stack()
+        .stack_name(stack_name)
+        .send()
+        .await
+        .map(|_| ())
+        .map_err(Into::into)
 }

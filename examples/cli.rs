@@ -1,9 +1,7 @@
 use std::{convert::TryInto, env, io, process};
 
-use cloudformatious::{ApplyStackInput, CloudFormatious, DeleteStackInput, TemplateSource};
+use cloudformatious::{ApplyStackInput, Client, DeleteStackInput, TemplateSource};
 use futures_util::StreamExt;
-use rusoto_cloudformation::CloudFormationClient;
-use rusoto_core::Region;
 
 const USAGE: &str = "Usage: cargo run --example cli -- <apply|delete> <stack_name> [template_body]";
 
@@ -23,7 +21,8 @@ async fn try_main() -> Result<(), Box<dyn std::error::Error>> {
         .try_into()
         .map_err(|_| USAGE)?;
 
-    let client = CloudFormationClient::new(Region::default());
+    let config = aws_config::load_from_env().await;
+    let client = Client::new(&config);
 
     match op.as_str() {
         "apply" => {

@@ -3,18 +3,17 @@
 [![crates.io](https://img.shields.io/crates/v/cloudformatious?logo=rust&style=flat-square)](https://crates.io/crates/cloudformatious)
 [![docs.rs](https://img.shields.io/docsrs/cloudformatious?logo=rust&style=flat-square)](https://docs.rs/cloudformatious)
 
-An extension trait for [`rusoto_cloudformation::CloudFormationClient`](https://docs.rs/rusoto_cloudformation/0.46.0/rusoto_cloudformation/struct.CloudFormationClient.html) offering richly typed higher-level APIs to perform long-running operations and await their termination or observe their progress.
+A CloudFormation library offering richly typed higher-level APIs to perform long-running operations and await their termination or observe their progress.
 
 ```rust,no_run
 use futures_util::StreamExt;
-use rusoto_cloudformation::CloudFormationClient;
-use rusoto_core::Region;
 
-use cloudformatious::{ApplyStackInput, CloudFormatious, DeleteStackInput, TemplateSource};
+use cloudformatious::{ApplyStackInput, DeleteStackInput, TemplateSource};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let client = CloudFormationClient::new(Region::EuWest2);
+    let config = aws_config::load_from_env().await;
+    let client = cloudformatious::Client::new(&config);
 
     let input = ApplyStackInput::new("my-stack", TemplateSource::inline("{}"));
     let mut stack = client.apply_stack(input);
@@ -54,14 +53,14 @@ The `CloudFormatious` extension trait has the following methods:
 [`apply_stack`]: https://docs.rs/cloudformatious/latest/cloudformatious/trait.CloudFormatious.html#method.apply_stack
 [`delete_stack`]: https://docs.rs/cloudformatious/latest/cloudformatious/trait.CloudFormatious.html#method.delete_stack
 
-In both cases, the API is a bit more ergonomic than `rusoto_cloudformation` and the API is richer.
+In both cases, the API is a bit more ergonomic than `aws_sdk_cloudformation` and the API is richer.
 In particular:
 
 - The return value of both methods implements `Future`, which can be `await`ed to wait for the overall operation to end.
 - The return value of both methods has an `events()` method, which can be used to get a `Stream` of stack events that occur during the operation.
 - Both methods return rich `Err` values if the stack settles in a failing state.
 - Both methods return rich `Err` values if the stack operation succeeds, but some resource(s) had errors (these "warnings" can be ignored, but it may mean leaving extraneous infrastructure in your environment).
-- `apply_stack` returns a rich `Ok` value with 'cleaner' types than the generated `rusoto_cloudformation` types.
+- `apply_stack` returns a rich `Ok` value with 'cleaner' types than the generated `aws_sdk_cloudformation` types (fewer redundant `Option`s, `enum`s for mutually exclusive states, etc.).
 
 ## Contributing
 

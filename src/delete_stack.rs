@@ -1,11 +1,11 @@
 use std::{fmt, future::Future, pin::Pin, task};
 
 use async_stream::try_stream;
+use aws_sdk_cloudformation::{
+    client::fluent_builders, error::DescribeStacksError, types::SdkError,
+};
 use chrono::Utc;
 use futures_util::{Stream, TryStreamExt};
-use memmem::{Searcher, TwoWaySearcher};
-use rusoto_cloudformation::{CloudFormation, DescribeStacksInput};
-use rusoto_core::{request::BufferedHttpResponse, RusotoError};
 
 use crate::{
     stack::{StackOperation, StackOperationError, StackOperationStatus},
@@ -18,13 +18,12 @@ use crate::{
 /// also available to make constructing sparse inputs more ergonomic.
 ///
 /// ```no_run
-/// # use rusoto_cloudformation::CloudFormationClient;
-/// # use rusoto_core::Region;
-/// use cloudformatious::{CloudFormatious, DeleteStackInput};
+/// use cloudformatious::DeleteStackInput;
 ///
 /// # #[tokio::main]
 /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-/// # let client = CloudFormationClient::new(Region::EuWest2);
+/// let config = aws_config::load_from_env().await;
+/// let client = cloudformatious::Client::new(&config);
 /// let input = DeleteStackInput::new("my-stack")
 ///     .set_client_request_token("hello")
 ///     .set_retain_resources(["MyResource"])
@@ -124,13 +123,12 @@ impl DeleteStackInput {
         self
     }
 
-    fn into_raw(self) -> rusoto_cloudformation::DeleteStackInput {
-        rusoto_cloudformation::DeleteStackInput {
-            client_request_token: self.client_request_token,
-            retain_resources: self.retain_resources,
-            role_arn: self.role_arn,
-            stack_name: self.stack_name,
-        }
+    fn configure(self, input: fluent_builders::DeleteStack) -> fluent_builders::DeleteStack {
+        input
+            .set_client_request_token(self.client_request_token)
+            .set_retain_resources(self.retain_resources)
+            .set_role_arn(self.role_arn)
+            .stack_name(self.stack_name)
     }
 }
 
@@ -143,7 +141,7 @@ pub enum DeleteStackError {
     /// This is likely to be due to invalid input parameters or missing CloudFormation permissions.
     /// The inner error should have a descriptive message.
     ///
-    /// **Note:** the inner error will always be some variant of [`RusotoError`], but since they are
+    /// **Note:** the inner error will always be some variant of [`SdkError`], but since they are
     /// generic over the type of service errors we either need a variant per API used, or `Box`. If
     /// you do need to programmatically match a particular API error you can use [`Box::downcast`].
     CloudFormationApi(Box<dyn std::error::Error>),
@@ -156,7 +154,7 @@ pub enum DeleteStackError {
 }
 
 impl DeleteStackError {
-    fn from_rusoto_error<E: std::error::Error + 'static>(error: RusotoError<E>) -> Self {
+    fn from_sdk_error<E: std::error::Error + 'static>(error: SdkError<E>) -> Self {
         Self::CloudFormationApi(error.into())
     }
 }
@@ -192,8 +190,8 @@ pub struct DeleteStack<'client> {
 }
 
 impl<'client> DeleteStack<'client> {
-    pub(crate) fn new<Client: CloudFormation>(
-        client: &'client Client,
+    pub(crate) fn new(
+        client: &'client aws_sdk_cloudformation::Client,
         input: DeleteStackInput,
     ) -> Self {
         let event_stream = try_stream! {
@@ -203,17 +201,16 @@ impl<'client> DeleteStack<'client> {
             };
 
             let started_at = Utc::now();
-            client
-                .delete_stack(input.into_raw())
+            input.configure(client.delete_stack()).send()
                 .await
-                .map_err(DeleteStackError::from_rusoto_error)?;
+                .map_err(DeleteStackError::from_sdk_error)?;
 
             let mut operation =
                 StackOperation::new(client, stack_id, started_at, check_operation_status);
             while let Some(event) = operation
                 .try_next()
                 .await
-                .map_err(DeleteStackError::from_rusoto_error)?
+                .map_err(DeleteStackError::from_sdk_error)?
             {
                 yield event;
             }
@@ -292,19 +289,14 @@ impl Stream for DeleteStackEvents<'_, '_> {
     }
 }
 
-async fn describe_stack_id<Client: CloudFormation>(
-    client: &Client,
+async fn describe_stack_id(
+    client: &aws_sdk_cloudformation::Client,
     stack_name: String,
 ) -> Result<Option<String>, DeleteStackError> {
-    let describe_stacks_input = DescribeStacksInput {
-        stack_name: Some(stack_name),
-        ..DescribeStacksInput::default()
-    };
-
-    let output = match client.describe_stacks(describe_stacks_input).await {
+    let output = match client.describe_stacks().stack_name(stack_name).send().await {
         Ok(output) => output,
-        Err(RusotoError::Unknown(response)) if is_not_exists(&response) => return Ok(None),
-        Err(error) => return Err(DeleteStackError::from_rusoto_error(error)),
+        Err(error) if is_not_exists(&error) => return Ok(None),
+        Err(error) => return Err(DeleteStackError::from_sdk_error(error)),
     };
 
     let stack = output
@@ -313,17 +305,11 @@ async fn describe_stack_id<Client: CloudFormation>(
         .pop()
         .expect("DescribeStacksOutput empty stacks");
 
-    if stack.stack_status.parse() == Ok(StackStatus::DeleteComplete) {
+    if stack.stack_status == Some(aws_sdk_cloudformation::model::StackStatus::DeleteComplete) {
         Ok(None)
     } else {
         Ok(Some(stack.stack_id.expect("Stack without stack_id")))
     }
-}
-
-fn is_not_exists(response: &BufferedHttpResponse) -> bool {
-    TwoWaySearcher::new(b"does not exist")
-        .search_in(&response.body)
-        .is_some()
 }
 
 fn check_operation_status(stack_status: StackStatus) -> StackOperationStatus {
@@ -333,4 +319,8 @@ fn check_operation_status(stack_status: StackStatus) -> StackOperationStatus {
         StackStatus::DeleteFailed => StackOperationStatus::Failed,
         _ => StackOperationStatus::Unexpected,
     }
+}
+
+fn is_not_exists(error: &SdkError<DescribeStacksError>) -> bool {
+    error.to_string().contains("does not exist")
 }

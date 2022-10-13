@@ -1,15 +1,13 @@
+use aws_sdk_cloudformation::model::StackStatus;
 use futures_util::StreamExt;
-use rusoto_cloudformation::DescribeStacksInput;
 
-use cloudformatious::{
-    ApplyStackInput, CloudFormatious, DeleteStackInput, Parameter, TemplateSource,
-};
+use cloudformatious::{ApplyStackInput, DeleteStackInput, Parameter, TemplateSource};
 
 use crate::common::{generated_name, get_client, EMPTY_TEMPLATE, NON_EMPTY_TEMPLATE};
 
 #[tokio::test]
 async fn delete_stack_fut_ok() -> Result<(), Box<dyn std::error::Error>> {
-    let client = get_client();
+    let client = get_client().await;
 
     let stack_name = generated_name();
     let input = ApplyStackInput::new(&stack_name, TemplateSource::inline(EMPTY_TEMPLATE));
@@ -18,14 +16,13 @@ async fn delete_stack_fut_ok() -> Result<(), Box<dyn std::error::Error>> {
     let input = DeleteStackInput::new(&stack_name);
     client.delete_stack(input).await?;
 
-    let input = DescribeStacksInput {
-        stack_name: Some(stack.stack_id),
-        ..DescribeStacksInput::default()
-    };
     let stack = {
-        use rusoto_cloudformation::CloudFormation;
+        let config = aws_config::load_from_env().await;
+        let client = aws_sdk_cloudformation::Client::new(&config);
         client
-            .describe_stacks(input)
+            .describe_stacks()
+            .stack_name(stack.stack_id)
+            .send()
             .await?
             .stacks
             .unwrap()
@@ -33,14 +30,14 @@ async fn delete_stack_fut_ok() -> Result<(), Box<dyn std::error::Error>> {
             .unwrap()
     };
 
-    assert_eq!(stack.stack_status, "DELETE_COMPLETE");
+    assert_eq!(stack.stack_status.unwrap(), StackStatus::DeleteComplete);
 
     Ok(())
 }
 
 #[tokio::test]
 async fn delete_stack_stream_ok() -> Result<(), Box<dyn std::error::Error>> {
-    let client = get_client();
+    let client = get_client().await;
 
     let stack_name = generated_name();
     let input = ApplyStackInput::new(&stack_name, TemplateSource::inline(NON_EMPTY_TEMPLATE))
@@ -75,14 +72,13 @@ async fn delete_stack_stream_ok() -> Result<(), Box<dyn std::error::Error>> {
         ]
     );
 
-    let input = DescribeStacksInput {
-        stack_name: Some(stack.stack_id),
-        ..DescribeStacksInput::default()
-    };
     let stack = {
-        use rusoto_cloudformation::CloudFormation;
+        let config = aws_config::load_from_env().await;
+        let client = aws_sdk_cloudformation::Client::new(&config);
         client
-            .describe_stacks(input)
+            .describe_stacks()
+            .stack_name(stack.stack_id)
+            .send()
             .await?
             .stacks
             .unwrap()
@@ -90,14 +86,14 @@ async fn delete_stack_stream_ok() -> Result<(), Box<dyn std::error::Error>> {
             .unwrap()
     };
 
-    assert_eq!(stack.stack_status, "DELETE_COMPLETE");
+    assert_eq!(stack.stack_status.unwrap(), StackStatus::DeleteComplete);
 
     Ok(())
 }
 
 #[tokio::test]
 async fn delete_stack_fut_noop() -> Result<(), Box<dyn std::error::Error>> {
-    let client = get_client();
+    let client = get_client().await;
 
     let stack_name = generated_name();
     let input = DeleteStackInput::new(&stack_name);
@@ -108,7 +104,7 @@ async fn delete_stack_fut_noop() -> Result<(), Box<dyn std::error::Error>> {
 
 #[tokio::test]
 async fn delete_stack_stream_noop() -> Result<(), Box<dyn std::error::Error>> {
-    let client = get_client();
+    let client = get_client().await;
 
     let stack_name = generated_name();
     let input = DeleteStackInput::new(&stack_name);
@@ -124,7 +120,7 @@ async fn delete_stack_stream_noop() -> Result<(), Box<dyn std::error::Error>> {
 
 #[tokio::test]
 async fn delete_stack_idempotent() -> Result<(), Box<dyn std::error::Error>> {
-    let client = get_client();
+    let client = get_client().await;
 
     let stack_name = generated_name();
     let input = ApplyStackInput::new(&stack_name, TemplateSource::inline(EMPTY_TEMPLATE));

@@ -2,15 +2,17 @@
 
 use std::{fmt, time::Duration};
 
+use aws_sdk_cloudformation::{
+    client::fluent_builders::CreateChangeSet,
+    error::{DescribeChangeSetError, ExecuteChangeSetError},
+    model::{Change, ChangeAction, Parameter, Tag},
+    output::DescribeChangeSetOutput,
+    types::SdkError,
+};
+use aws_smithy_types_convert::date_time::DateTimeExt;
 use chrono::{DateTime, Utc};
 use enumset::EnumSet;
 use futures_util::TryFutureExt;
-use memmem::{Searcher, TwoWaySearcher};
-use rusoto_cloudformation::{
-    Change, CloudFormation, CreateChangeSetInput, DescribeChangeSetError, DescribeChangeSetInput,
-    DescribeChangeSetOutput, ExecuteChangeSetError, ExecuteChangeSetInput, Parameter, Tag,
-};
-use rusoto_core::{request::BufferedHttpResponse, RusotoError};
 use serde_plain::{forward_display_to_serde, forward_from_str_to_serde};
 use tokio::time::{interval_at, Instant};
 
@@ -28,11 +30,10 @@ pub(crate) enum ChangeSetType {
 }
 
 impl ChangeSetType {
-    fn try_from(change_set_type: Option<&str>) -> Result<Self, String> {
-        match change_set_type {
-            Some("CREATE") => Ok(Self::Create),
-            None | Some("UPDATE") => Ok(Self::Update),
-            Some(other) => Err(other.to_string()),
+    pub(crate) fn into_sdk(self) -> aws_sdk_cloudformation::model::ChangeSetType {
+        match self {
+            ChangeSetType::Create => aws_sdk_cloudformation::model::ChangeSetType::Create,
+            ChangeSetType::Update => aws_sdk_cloudformation::model::ChangeSetType::Update,
         }
     }
 }
@@ -111,7 +112,7 @@ pub struct ChangeSet {
 }
 
 impl ChangeSet {
-    fn from_raw(change_set: DescribeChangeSetOutput) -> Self {
+    fn from_sdk(change_set: DescribeChangeSetOutput) -> Self {
         Self {
             capabilities: change_set
                 .capabilities
@@ -119,8 +120,9 @@ impl ChangeSet {
                 .into_iter()
                 .map(|capability| {
                     capability
+                        .as_str()
                         .parse()
-                        .expect("DescribeChangeSetOutput with invalid capability")
+                        .expect("DescribeChangeSetOutput with invalid Capability")
                 })
                 .collect(),
             change_set_id: change_set
@@ -133,19 +135,17 @@ impl ChangeSet {
                 .changes
                 .unwrap_or_default()
                 .into_iter()
-                .map(ResourceChange::from_raw)
+                .map(ResourceChange::from_sdk)
                 .collect(),
-            creation_time: DateTime::parse_from_rfc3339(
-                &change_set
-                    .creation_time
-                    .expect("DescribeChangeSetOutput without creation_time"),
-            )
-            .expect("DescribeChangeSetOutput invalid creation_time")
-            .into(),
+            creation_time: change_set
+                .creation_time
+                .expect("DescribeChangeSetOutput without creation_time")
+                .to_chrono_utc(),
             description: change_set.description,
             execution_status: change_set
                 .execution_status
                 .expect("DescribeChangeSetOutput without execution_status")
+                .as_str()
                 .parse()
                 .expect("DescribeChangeSetOutput with invalid execution_status"),
             notification_arns: change_set.notification_ar_ns.unwrap_or_default(),
@@ -159,6 +159,7 @@ impl ChangeSet {
             status: change_set
                 .status
                 .expect("DescribeChangeSetOutput without status")
+                .as_str()
                 .parse()
                 .expect("DescribeChangeSetOutput unexpected status"),
             status_reason: change_set.status_reason,
@@ -213,11 +214,14 @@ pub struct ResourceChange {
 }
 
 impl ResourceChange {
-    fn from_raw(change: Change) -> Self {
+    fn from_sdk(change: Change) -> Self {
         assert!(
-            change.type_.as_deref() == Some("Resource"),
-            "Change with unexpected type_ {:?}",
-            change.type_
+            matches!(
+                change.r#type,
+                Some(aws_sdk_cloudformation::model::ChangeType::Resource)
+            ),
+            "Change with unexpected type {:?}",
+            change.r#type
         );
         let change = change
             .resource_change
@@ -226,12 +230,9 @@ impl ResourceChange {
             .resource_type
             .expect("ResourceChange without resource_type");
         Self {
-            action: Action::from_raw(
+            action: Action::from_sdk(
                 &resource_type,
-                change
-                    .action
-                    .as_deref()
-                    .expect("ResourceChange without action"),
+                &change.action.expect("ResourceChange without action"),
                 change.details,
                 change.replacement,
                 change.scope,
@@ -265,15 +266,18 @@ pub enum Action {
 }
 
 impl Action {
-    fn from_raw(
+    fn from_sdk(
         resource_type: &str,
-        action: &str,
-        details: Option<Vec<rusoto_cloudformation::ResourceChangeDetail>>,
-        replacement: Option<String>,
-        scope: Option<Vec<String>>,
+        action: &ChangeAction,
+        details: Option<Vec<aws_sdk_cloudformation::model::ResourceChangeDetail>>,
+        replacement: Option<aws_sdk_cloudformation::model::Replacement>,
+        scope: Option<Vec<aws_sdk_cloudformation::model::ResourceAttribute>>,
     ) -> Self {
         match action {
-            "Add" | "Remove" | "Import" | "Dynamic" => {
+            ChangeAction::Add
+            | ChangeAction::Remove
+            | ChangeAction::Import
+            | ChangeAction::Dynamic => {
                 assert!(
                     matches!(details.as_deref(), None | Some([])),
                     "ResourceChange with action {:?} and details",
@@ -290,18 +294,18 @@ impl Action {
                     action
                 );
                 match action {
-                    "Add" => Self::Add,
-                    "Remove" => Self::Remove,
-                    "Import" => Self::Import,
-                    "Dynamic" => Self::Dynamic,
+                    ChangeAction::Add => Self::Add,
+                    ChangeAction::Remove => Self::Remove,
+                    ChangeAction::Import => Self::Import,
+                    ChangeAction::Dynamic => Self::Dynamic,
                     _ => unreachable!(),
                 }
             }
-            "Modify" => Self::Modify(ModifyDetail::from_raw(
+            ChangeAction::Modify => Self::Modify(ModifyDetail::from_sdk(
                 resource_type,
                 details.expect("ResourceChange with action \"Modify\" without details"),
                 &replacement.expect("ResourceChange with action \"Modify\" without replacement"),
-                &scope.expect("ResourceChange with action \"Modify\" without scope"),
+                scope.expect("ResourceChange with action \"Modify\" without scope"),
             )),
             _ => panic!("ResourceChange with invalid action {:?}", action),
         }
@@ -324,24 +328,28 @@ pub struct ModifyDetail {
 }
 
 impl ModifyDetail {
-    fn from_raw(
+    fn from_sdk(
         resource_type: &str,
-        details: Vec<rusoto_cloudformation::ResourceChangeDetail>,
-        replacement: &str,
-        scope: &[String],
+        details: Vec<aws_sdk_cloudformation::model::ResourceChangeDetail>,
+        replacement: &aws_sdk_cloudformation::model::Replacement,
+        scope: Vec<aws_sdk_cloudformation::model::ResourceAttribute>,
     ) -> Self {
         Self {
             details: details
                 .into_iter()
-                .map(|detail| ResourceChangeDetail::from_raw(resource_type, detail))
+                .map(|detail| ResourceChangeDetail::from_sdk(resource_type, detail))
                 .collect(),
             replacement: replacement
+                .as_str()
                 .parse()
                 .expect("ResourceChange with invalid replacement"),
             scope: scope
-                .iter()
-                .map(|scope| -> ModifyScope {
-                    scope.parse().expect("ResourceChange with invalid scope")
+                .into_iter()
+                .map(|scope| {
+                    scope
+                        .as_str()
+                        .parse::<ModifyScope>()
+                        .expect("ResourceChange with invalid scope")
                 })
                 .collect(),
         }
@@ -438,19 +446,22 @@ pub struct ResourceChangeDetail {
 }
 
 impl ResourceChangeDetail {
-    fn from_raw(resource_type: &str, details: rusoto_cloudformation::ResourceChangeDetail) -> Self {
+    fn from_sdk(
+        resource_type: &str,
+        details: aws_sdk_cloudformation::model::ResourceChangeDetail,
+    ) -> Self {
         let causing_entity = details.causing_entity;
         Self {
             change_source: details
                 .change_source
-                .as_deref()
-                .map(move |change_source| ChangeSource::from_raw(change_source, causing_entity)),
+                .map(move |change_source| ChangeSource::from_sdk(&change_source, causing_entity)),
             evaluation: details
                 .evaluation
                 .expect("ResourceChangeDetail without evaluation")
+                .as_str()
                 .parse()
                 .expect("ResourceChangeDetail with invalid evaluation"),
-            target: ResourceTargetDefinition::from_raw(
+            target: ResourceTargetDefinition::from_sdk(
                 resource_type,
                 details.target.expect("ResourceChangeDetail without target"),
             ),
@@ -496,9 +507,14 @@ pub enum ChangeSource {
 }
 
 impl ChangeSource {
-    fn from_raw(change_source: &str, causing_entity: Option<String>) -> Self {
+    fn from_sdk(
+        change_source: &aws_sdk_cloudformation::model::ChangeSource,
+        causing_entity: Option<String>,
+    ) -> Self {
         match change_source {
-            "ResourceReference" | "ParameterReference" | "ResourceAttribute" => {
+            aws_sdk_cloudformation::model::ChangeSource::ResourceReference
+            | aws_sdk_cloudformation::model::ChangeSource::ParameterReference
+            | aws_sdk_cloudformation::model::ChangeSource::ResourceAttribute => {
                 let causing_entity = causing_entity.unwrap_or_else(|| {
                     panic!(
                         "ResourceChangeDetail with change_source {:?} without causing_entity",
@@ -506,14 +522,22 @@ impl ChangeSource {
                     )
                 });
                 match change_source {
-                    "ResourceReference" => Self::ResourceReference(causing_entity),
-                    "ParameterReference" => Self::ParameterReference(causing_entity),
-                    "ResourceAttribute" => Self::ResourceAttribute(causing_entity),
+                    aws_sdk_cloudformation::model::ChangeSource::ResourceReference => {
+                        Self::ResourceReference(causing_entity)
+                    }
+                    aws_sdk_cloudformation::model::ChangeSource::ParameterReference => {
+                        Self::ParameterReference(causing_entity)
+                    }
+                    aws_sdk_cloudformation::model::ChangeSource::ResourceAttribute => {
+                        Self::ResourceAttribute(causing_entity)
+                    }
                     _ => unreachable!(),
                 }
             }
-            "DirectModification" => Self::DirectModification,
-            "Automatic" => Self::Automatic,
+            aws_sdk_cloudformation::model::ChangeSource::DirectModification => {
+                Self::DirectModification
+            }
+            aws_sdk_cloudformation::model::ChangeSource::Automatic => Self::Automatic,
             _ => panic!(
                 "ResourceChangeDetail with invalid change_source {:?}",
                 change_source
@@ -574,21 +598,33 @@ pub enum ResourceTargetDefinition {
 }
 
 impl ResourceTargetDefinition {
-    fn from_raw(
+    fn from_sdk(
         resource_type: &str,
-        target: rusoto_cloudformation::ResourceTargetDefinition,
+        target: aws_sdk_cloudformation::model::ResourceTargetDefinition,
     ) -> Self {
         let attribute = target
             .attribute
             .expect("ResourceTargetDefinition without attribute");
-        match attribute.as_str() {
-            "Properties" => {
-                Self::Properties {
-                    name: target.name.expect("ResourceTargetDefinition with attribute \"Properties\" without name"),
-                    requires_recreation: target.requires_recreation.expect("ResourceTargetDefinition with attribute \"Properties\" without requires_recreation").parse().expect("ResourceTargetDefinition with invalid requires_recreation"),
-                }
-            }
-            "Metadata" | "CreationPolicy" | "UpdatePolicy" | "DeletionPolicy" | "Tags" => {
+        match attribute {
+            aws_sdk_cloudformation::model::ResourceAttribute::Properties => Self::Properties {
+                name: target
+                    .name
+                    .expect("ResourceTargetDefinition with attribute \"Properties\" without name"),
+                requires_recreation: target
+                    .requires_recreation
+                    .expect(concat!(
+                        "ResourceTargetDefinition with attribute \"Properties\" without ",
+                        "requires_recreation"
+                    ))
+                    .as_str()
+                    .parse()
+                    .expect("ResourceTargetDefinition with invalid requires_recreation"),
+            },
+            aws_sdk_cloudformation::model::ResourceAttribute::Metadata
+            | aws_sdk_cloudformation::model::ResourceAttribute::CreationPolicy
+            | aws_sdk_cloudformation::model::ResourceAttribute::UpdatePolicy
+            | aws_sdk_cloudformation::model::ResourceAttribute::DeletionPolicy
+            | aws_sdk_cloudformation::model::ResourceAttribute::Tags => {
                 assert!(
                     target.name.is_none(),
                     "ResourceTargetDefinition with attribute {:?} with name",
@@ -599,7 +635,10 @@ impl ResourceTargetDefinition {
                     // NOTE: CloudFormation may report tag changes on AWS::SecretsManager::Secret
                     // resources as conditionally requiring recreation. We assume this is a bug in
                     // CloudFormation and ignore it.
-                    matches!(target.requires_recreation.as_deref(), None | Some("Never")) || resource_type == "AWS::SecretsManager::Secret",
+                    matches!(
+                        target.requires_recreation,
+                        None | Some(aws_sdk_cloudformation::model::RequiresRecreation::Never)
+                    ) || resource_type == "AWS::SecretsManager::Secret",
                     "ResourceTargetDefinition with attribute {:?} with requires_recreation",
                     attribute
                 );
@@ -609,10 +648,10 @@ impl ResourceTargetDefinition {
                     "UpdatePolicy" => Self::UpdatePolicy,
                     "DeletionPolicy" => Self::DeletionPolicy,
                     "Tags" => Self::Tags,
-                    _ => unreachable!()
+                    _ => unreachable!(),
                 }
-            },
-            _ => panic!("ResourceTargetDefinition with invalid attribute")
+            }
+            _ => panic!("ResourceTargetDefinition with invalid attribute"),
         }
     }
 }
@@ -642,67 +681,65 @@ pub(crate) struct ChangeSetWithType {
 }
 
 pub(crate) enum CreateChangeSetError {
-    CreateApi(RusotoError<rusoto_cloudformation::CreateChangeSetError>),
-    PollApi(RusotoError<DescribeChangeSetError>),
+    CreateApi(SdkError<aws_sdk_cloudformation::error::CreateChangeSetError>),
+    PollApi(SdkError<DescribeChangeSetError>),
     NoChanges(ChangeSetWithType),
     Failed(ChangeSetWithType),
 }
 
-impl From<RusotoError<rusoto_cloudformation::CreateChangeSetError>> for CreateChangeSetError {
-    fn from(error: RusotoError<rusoto_cloudformation::CreateChangeSetError>) -> Self {
+impl From<SdkError<aws_sdk_cloudformation::error::CreateChangeSetError>> for CreateChangeSetError {
+    fn from(error: SdkError<aws_sdk_cloudformation::error::CreateChangeSetError>) -> Self {
         Self::CreateApi(error)
     }
 }
 
-impl From<RusotoError<DescribeChangeSetError>> for CreateChangeSetError {
-    fn from(error: RusotoError<DescribeChangeSetError>) -> Self {
+impl From<SdkError<DescribeChangeSetError>> for CreateChangeSetError {
+    fn from(error: SdkError<DescribeChangeSetError>) -> Self {
         Self::PollApi(error)
     }
 }
 
-pub(crate) async fn create_change_set<Client: CloudFormation>(
-    client: &Client,
-    mut input: CreateChangeSetInput,
+pub(crate) async fn create_change_set(
+    client: &aws_sdk_cloudformation::Client,
+    mut change_set_type: ChangeSetType,
+    input: CreateChangeSet,
 ) -> Result<ChangeSetWithType, CreateChangeSetError> {
-    let mut change_set_type = ChangeSetType::try_from(input.change_set_type.as_deref());
-    let change_set = client.create_change_set(input.clone());
-    let change_set = change_set
+    let change_set = input
+        .clone()
+        .send()
         .or_else({
             let change_set_type = &mut change_set_type;
             |error| async move {
                 match (change_set_type, error) {
-                    (
-                        Ok(change_set_type @ ChangeSetType::Create),
-                        RusotoError::Unknown(ref response),
-                    ) if is_already_exists(response) => {
+                    (change_set_type @ ChangeSetType::Create, error)
+                        if is_already_exists(&error) =>
+                    {
                         *change_set_type = ChangeSetType::Update;
-                        input.change_set_type = Some(change_set_type.to_string());
-                        client.create_change_set(input).await
+                        input
+                            .change_set_type(change_set_type.into_sdk())
+                            .send()
+                            .await
                     }
                     (_, error) => Err(error),
                 }
             }
         })
         .await?;
-    let change_set_type =
-        change_set_type.expect("CreateChangeSet succeeded with invalid change_set_type");
     let change_set_id = change_set.id.expect("CreateChangeSetOutput without id");
 
     let mut interval = interval_at(
         Instant::now() + POLL_INTERVAL_CHANGE_SET,
         POLL_INTERVAL_CHANGE_SET,
     );
-    let describe_change_set_input = DescribeChangeSetInput {
-        change_set_name: change_set_id,
-        ..DescribeChangeSetInput::default()
-    };
     loop {
         interval.tick().await;
 
         let change_set = client
-            .describe_change_set(describe_change_set_input.clone())
+            .describe_change_set()
+            .change_set_name(change_set_id.clone())
+            .send()
             .await?;
-        let change_set = ChangeSet::from_raw(change_set);
+        let change_set = ChangeSet::from_sdk(change_set);
         match change_set.status {
             ChangeSetStatus::CreatePending | ChangeSetStatus::CreateInProgress => continue,
             ChangeSetStatus::CreateComplete => {
@@ -733,21 +770,21 @@ pub(crate) async fn create_change_set<Client: CloudFormation>(
     }
 }
 
-pub(crate) async fn execute_change_set<Client: CloudFormation>(
-    client: &Client,
+pub(crate) async fn execute_change_set(
+    client: &aws_sdk_cloudformation::Client,
     stack_id: String,
     change_set_id: String,
     change_set_type: ChangeSetType,
 ) -> Result<
     StackOperation<'_, impl Fn(StackStatus) -> StackOperationStatus + Unpin>,
-    RusotoError<ExecuteChangeSetError>,
+    SdkError<ExecuteChangeSetError>,
 > {
     let started_at = Utc::now();
-    let input = ExecuteChangeSetInput {
-        change_set_name: change_set_id,
-        ..ExecuteChangeSetInput::default()
-    };
-    client.execute_change_set(input).await?;
+    client
+        .execute_change_set()
+        .change_set_name(change_set_id)
+        .send()
+        .await?;
 
     Ok(StackOperation::new(
         client,
@@ -760,10 +797,10 @@ pub(crate) async fn execute_change_set<Client: CloudFormation>(
     ))
 }
 
-fn is_already_exists(response: &BufferedHttpResponse) -> bool {
-    TwoWaySearcher::new(b" already exists ")
-        .search_in(&response.body)
-        .is_some()
+fn is_already_exists(
+    error: &SdkError<aws_sdk_cloudformation::error::CreateChangeSetError>,
+) -> bool {
+    error.to_string().contains(" already exists ")
 }
 
 fn is_no_changes(status_reason: Option<&str>) -> bool {
