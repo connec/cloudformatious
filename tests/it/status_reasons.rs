@@ -1,19 +1,18 @@
 use assert_matches::assert_matches;
-use rusoto_sts::{GetCallerIdentityRequest, Sts, StsClient};
 
 use cloudformatious::{
-    status_reason::StatusReasonDetail, ApplyStackError, ApplyStackInput, CloudFormatious,
-    ResourceStatus, StackStatus, TemplateSource,
+    status_reason::StatusReasonDetail, ApplyStackError, ApplyStackInput, ResourceStatus,
+    StackStatus, TemplateSource,
 };
 
 use crate::common::{
-    clean_up, generated_name, get_arbitrary_client, get_client, AUTHORIZATION_FAILURE_TEMPLATE,
+    clean_up, generated_name, get_client, get_sts_client, AUTHORIZATION_FAILURE_TEMPLATE,
     MISSING_PERMISSION_1_TEMPLATE, MISSING_PERMISSION_2_TEMPLATE,
 };
 
 #[tokio::test]
 async fn status_reason_missing_permission_no_principal() -> Result<(), Box<dyn std::error::Error>> {
-    let client = get_client();
+    let client = get_client().await;
 
     let stack_name = generated_name();
     let input = ApplyStackInput::new(
@@ -40,7 +39,7 @@ async fn status_reason_missing_permission_no_principal() -> Result<(), Box<dyn s
     assert_eq!(missing_permission.principal, None);
     assert!(missing_permission.encoded_authorization_message.is_none());
 
-    clean_up(&client, stack_name).await?;
+    clean_up(stack_name).await?;
 
     Ok(())
 }
@@ -48,13 +47,10 @@ async fn status_reason_missing_permission_no_principal() -> Result<(), Box<dyn s
 #[tokio::test]
 async fn status_reason_missing_permission_with_principal() -> Result<(), Box<dyn std::error::Error>>
 {
-    let identity_client = get_arbitrary_client(StsClient::new_with);
-    let identity = identity_client
-        .get_caller_identity(GetCallerIdentityRequest {})
-        .await
-        .unwrap();
+    let identity_client = get_sts_client().await;
+    let identity = identity_client.get_caller_identity().send().await.unwrap();
 
-    let client = get_client();
+    let client = get_client().await;
 
     let stack_name = generated_name();
     let input = ApplyStackInput::new(
@@ -84,14 +80,14 @@ async fn status_reason_missing_permission_with_principal() -> Result<(), Box<dyn
     assert_eq!(missing_permission.principal, identity.arn.as_deref());
     assert!(missing_permission.encoded_authorization_message.is_none());
 
-    clean_up(&client, stack_name).await?;
+    clean_up(stack_name).await?;
 
     Ok(())
 }
 
 #[tokio::test]
 async fn status_reason_authorization_failure() -> Result<(), Box<dyn std::error::Error>> {
-    let client = get_client();
+    let client = get_client().await;
 
     let stack_name = generated_name();
     let input = ApplyStackInput::new(
@@ -114,11 +110,11 @@ async fn status_reason_authorization_failure() -> Result<(), Box<dyn std::error:
       Some(StatusReasonDetail::AuthorizationFailure(m)) => m
     );
 
-    let sts_client = get_arbitrary_client(StsClient::new_with);
+    let sts_client = get_sts_client().await;
     let decoded_message = encoded_message.decode(&sts_client).await?;
     assert_eq!(decoded_message["context"]["action"], "ec2:CreateVpc");
 
-    clean_up(&client, stack_name).await?;
+    clean_up(stack_name).await?;
 
     Ok(())
 }

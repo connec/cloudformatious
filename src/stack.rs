@@ -1,10 +1,10 @@
 use std::{fmt, pin::Pin, task, time::Duration};
 
 use async_stream::try_stream;
+use aws_sdk_cloudformation::{error::DescribeStackEventsError, types::SdkError};
+use aws_smithy_types_convert::date_time::DateTimeExt;
 use chrono::{DateTime, Utc};
 use futures_util::Stream;
-use rusoto_cloudformation::{CloudFormation, DescribeStackEventsError, DescribeStackEventsInput};
-use rusoto_core::RusotoError;
 
 use crate::{
     status_reason::StatusReason, ResourceStatus, StackEvent, StackEventDetails, StackStatus, Status,
@@ -140,7 +140,7 @@ pub(crate) struct StackOperation<'client, F> {
     stack_id: String,
     check_progress: F,
     events: Pin<
-        Box<dyn Stream<Item = Result<StackEvent, RusotoError<DescribeStackEventsError>>> + 'client>,
+        Box<dyn Stream<Item = Result<StackEvent, SdkError<DescribeStackEventsError>>> + 'client>,
     >,
     stack_error_status: Option<StackStatus>,
     stack_error_status_reason: Option<String>,
@@ -151,37 +151,40 @@ impl<'client, F> StackOperation<'client, F>
 where
     F: Fn(StackStatus) -> StackOperationStatus + Unpin,
 {
-    pub(crate) fn new<Client: CloudFormation>(
-        client: &'client Client,
+    pub(crate) fn new(
+        client: &'client aws_sdk_cloudformation::Client,
         stack_id: String,
         started_at: DateTime<Utc>,
         check_progress: F,
     ) -> Self {
-        let describe_stack_events_input = DescribeStackEventsInput {
-            stack_name: Some(stack_id.clone()),
-            ..DescribeStackEventsInput::default()
-        };
+        let stack_id_ = stack_id.clone();
         let events = try_stream! {
             let mut interval = tokio::time::interval(POLL_INTERVAL_STACK_EVENT);
-            let mut since = started_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+            let mut since = started_at;
 
             loop {
                 interval.tick().await;
 
                 let stack_events: Vec<_> = client
-                    .describe_stack_events(describe_stack_events_input.clone())
+                    .describe_stack_events()
+                    .stack_name(stack_id_.clone())
+                    .send()
                     .await?
                     .stack_events
                     .expect("DescribeStackEventsOutput without stack_events")
                     .into_iter()
-                    .take_while(|event| event.timestamp > since)
-                    .map(StackEvent::from_raw)
+                    .take_while(|event| {
+                        event
+                            .timestamp
+                            .expect("StackEvent without timestamp")
+                            .to_chrono_utc()
+                            > since
+                    })
+                    .map(StackEvent::from_sdk)
                     .collect();
 
                 if let Some(stack_event) = stack_events.first() {
-                    since = stack_event
-                        .timestamp()
-                        .to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+                    since = stack_event.timestamp().clone();
                 }
 
                 for stack_event in stack_events.into_iter().rev() {
@@ -232,7 +235,7 @@ impl<F> Stream for StackOperation<'_, F>
 where
     F: Fn(StackStatus) -> StackOperationStatus + Unpin,
 {
-    type Item = Result<StackEvent, RusotoError<DescribeStackEventsError>>;
+    type Item = Result<StackEvent, SdkError<DescribeStackEventsError>>;
 
     fn poll_next(
         mut self: Pin<&mut Self>,

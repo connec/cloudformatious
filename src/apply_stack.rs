@@ -3,17 +3,20 @@
 use std::{fmt, future::Future, pin::Pin, task};
 
 use async_stream::try_stream;
+use aws_sdk_cloudformation::{
+    client::fluent_builders::CreateChangeSet,
+    model::{Stack, Tag},
+    types::SdkError,
+};
+use aws_smithy_types_convert::date_time::DateTimeExt;
 use chrono::{DateTime, Utc};
 use futures_util::{Stream, TryFutureExt, TryStreamExt};
-use rusoto_cloudformation::{
-    CloudFormation, CreateChangeSetInput, DescribeStacksInput, Stack, Tag,
-};
-use rusoto_core::RusotoError;
 use serde_plain::{forward_display_to_serde, forward_from_str_to_serde};
 
 use crate::{
     change_set::{
-        create_change_set, execute_change_set, ChangeSet, ChangeSetWithType, CreateChangeSetError,
+        create_change_set, execute_change_set, ChangeSet, ChangeSetType, ChangeSetWithType,
+        CreateChangeSetError,
     },
     stack::StackOperationError,
     ChangeSetStatus, StackEvent, StackFailure, StackStatus, StackWarning,
@@ -25,14 +28,13 @@ use crate::{
 /// also available to make construction as ergonomic as possible.
 ///
 /// ```no_run
-/// use rusoto_cloudformation::Tag;
-/// # use rusoto_cloudformation::CloudFormationClient;
-/// # use rusoto_core::Region;
-/// use cloudformatious::{ApplyStackInput, Capability, CloudFormatious, Parameter, TemplateSource};
+/// use aws_sdk_cloudformation::model::Tag;
+/// use cloudformatious::{ApplyStackInput, Capability, Parameter, TemplateSource};
 ///
 /// # #[tokio::main]
 /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-/// # let client = CloudFormationClient::new(Region::EuWest2);
+/// let config = aws_config::load_from_env().await;
+/// let client = cloudformatious::Client::new(&config);
 /// let input = ApplyStackInput::new("my-stack", TemplateSource::inline("{}"))
 ///     .set_capabilities([Capability::Iam])
 ///     .set_client_request_token("hello")
@@ -40,7 +42,7 @@ use crate::{
 ///     .set_parameters([Parameter { key: "hello".to_string(), value: "world".to_string() }])
 ///     .set_resource_types(["AWS::IAM::Role"])
 ///     .set_role_arn("arn:foo")
-///     .set_tags([Tag { key: "hello".to_string(), value: "world".to_string() }]);
+///     .set_tags([Tag::builder().key("hello").value("world").build()]);
 /// let output = client.apply_stack(input).await?;
 /// // ...
 /// # Ok(())
@@ -226,30 +228,36 @@ impl ApplyStackInput {
         self
     }
 
-    fn into_raw(self) -> CreateChangeSetInput {
+    fn configure(self, op: CreateChangeSet) -> (ChangeSetType, CreateChangeSet) {
+        let change_set_type = ChangeSetType::Create;
         let (template_body, template_url) = match self.template_source {
             TemplateSource::Inline { body } => (Some(body), None),
             TemplateSource::S3 { url } => (None, Some(url)),
         };
-        CreateChangeSetInput {
-            capabilities: Some(self.capabilities.iter().map(ToString::to_string).collect()),
-            change_set_name: format!("apply-stack-{}", Utc::now().timestamp_millis()),
-            change_set_type: Some("CREATE".to_string()),
-            notification_ar_ns: Some(self.notification_arns),
-            parameters: Some(
+        let input = op
+            .set_capabilities(Some(
+                self.capabilities
+                    .into_iter()
+                    .map(Capability::into_sdk)
+                    .collect(),
+            ))
+            .change_set_name(format!("apply-stack-{}", Utc::now().timestamp_millis()))
+            .change_set_type(change_set_type.into_sdk())
+            .set_notification_ar_ns(Some(self.notification_arns))
+            .set_parameters(Some(
                 self.parameters
                     .into_iter()
-                    .map(Parameter::into_raw)
+                    .map(Parameter::into_sdk)
                     .collect(),
-            ),
-            resource_types: self.resource_types,
-            role_arn: self.role_arn,
-            stack_name: self.stack_name,
-            tags: Some(self.tags),
-            template_body,
-            template_url,
-            ..CreateChangeSetInput::default()
-        }
+            ))
+            .set_resource_types(self.resource_types)
+            .set_role_arn(self.role_arn)
+            .stack_name(self.stack_name)
+            .set_tags(Some(self.tags))
+            .set_template_body(template_body)
+            .set_template_url(template_url);
+
+        (change_set_type, input)
     }
 }
 
@@ -326,6 +334,16 @@ pub enum Capability {
     AutoExpand,
 }
 
+impl Capability {
+    fn into_sdk(self) -> aws_sdk_cloudformation::model::Capability {
+        match self {
+            Self::Iam => aws_sdk_cloudformation::model::Capability::CapabilityIam,
+            Self::NamedIam => aws_sdk_cloudformation::model::Capability::CapabilityNamedIam,
+            Self::AutoExpand => aws_sdk_cloudformation::model::Capability::CapabilityAutoExpand,
+        }
+    }
+}
+
 forward_display_to_serde!(Capability);
 forward_from_str_to_serde!(Capability);
 
@@ -343,12 +361,11 @@ pub struct Parameter {
 }
 
 impl Parameter {
-    fn into_raw(self) -> rusoto_cloudformation::Parameter {
-        rusoto_cloudformation::Parameter {
-            parameter_key: Some(self.key),
-            parameter_value: Some(self.value),
-            ..rusoto_cloudformation::Parameter::default()
-        }
+    fn into_sdk(self) -> aws_sdk_cloudformation::model::Parameter {
+        aws_sdk_cloudformation::model::Parameter::builder()
+            .parameter_key(self.key)
+            .parameter_value(self.value)
+            .build()
     }
 }
 
@@ -432,15 +449,15 @@ impl ApplyStackOutput {
     fn from_raw(stack: Stack) -> Self {
         Self {
             change_set_id: stack.change_set_id.expect("Stack without change_set_id"),
-            creation_time: DateTime::parse_from_rfc3339(&stack.creation_time)
-                .expect("Stack invalid creation_time")
-                .into(),
+            creation_time: stack
+                .creation_time
+                .expect("Stack without creation_time")
+                .to_chrono_utc(),
             description: stack.description,
-            last_updated_time: stack.last_updated_time.as_deref().map(|last_updated_time| {
-                DateTime::parse_from_rfc3339(last_updated_time)
-                    .expect("Stack invalid last_updated_time")
-                    .into()
-            }),
+            last_updated_time: stack
+                .last_updated_time
+                .as_ref()
+                .map(DateTimeExt::to_chrono_utc),
             outputs: stack
                 .outputs
                 .map(|outputs| {
@@ -458,8 +475,13 @@ impl ApplyStackOutput {
                 })
                 .unwrap_or_default(),
             stack_id: stack.stack_id.expect("Stack without stack_id"),
-            stack_name: stack.stack_name,
-            stack_status: stack.stack_status.parse().expect("invalid stack status"),
+            stack_name: stack.stack_name.expect("Stack without stack_name"),
+            stack_status: stack
+                .stack_status
+                .expect("Stack without stack_status")
+                .as_str()
+                .parse()
+                .expect("invalid stack status"),
             tags: stack.tags.unwrap_or_default(),
         }
     }
@@ -490,7 +512,7 @@ pub enum ApplyStackError {
     /// This is likely to be due to invalid input parameters or missing CloudFormation permissions.
     /// The inner error should have a descriptive message.
     ///
-    /// **Note:** the inner error will always be some variant of [`RusotoError`], but since they are
+    /// **Note:** the inner error will always be some variant of [`SdkError`], but since they are
     /// generic over the type of service errors we either need a variant per API used, or `Box`. If
     /// you do need to programmatically match a particular API error you can use [`Box::downcast`].
     CloudFormationApi(Box<dyn std::error::Error>),
@@ -526,11 +548,10 @@ pub enum ApplyStackError {
     /// simply map this variant away:
     ///
     /// ```no_run
-    /// # use rusoto_cloudformation::CloudFormationClient;
-    /// # use cloudformatious::{ApplyStackError, CloudFormatious};
+    /// # use cloudformatious::ApplyStackError;
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), ApplyStackError> {
-    /// # let client: CloudFormationClient = todo!();
+    /// # let client: cloudformatious::Client = todo!();
     /// # let input = todo!();
     /// let output = client
     ///     .apply_stack(input)
@@ -552,7 +573,7 @@ pub enum ApplyStackError {
 }
 
 impl ApplyStackError {
-    fn from_rusoto_error<E: std::error::Error + 'static>(error: RusotoError<E>) -> Self {
+    fn from_sdk_error<E: std::error::Error + 'static>(error: SdkError<E>) -> Self {
         Self::CloudFormationApi(error.into())
     }
 }
@@ -608,8 +629,8 @@ pub struct ApplyStack<'client> {
 }
 
 impl<'client> ApplyStack<'client> {
-    pub(crate) fn new<Client: CloudFormation>(
-        client: &'client Client,
+    pub(crate) fn new(
+        client: &'client aws_sdk_cloudformation::Client,
         input: ApplyStackInput,
     ) -> Self {
         let event_stream = try_stream! {
@@ -637,11 +658,11 @@ impl<'client> ApplyStack<'client> {
             let mut operation =
                 execute_change_set(client, stack_id.clone(), change_set_id, change_set_type)
                     .await
-                    .map_err(ApplyStackError::from_rusoto_error)?;
+                    .map_err(ApplyStackError::from_sdk_error)?;
             while let Some(event) = operation
                 .try_next()
                 .await
-                .map_err(ApplyStackError::from_rusoto_error)?
+                .map_err(ApplyStackError::from_sdk_error)?
             {
                 yield ApplyStackEvent::Event(event);
             }
@@ -792,18 +813,19 @@ enum ApplyStackEvent {
     Output(ApplyStackOutput),
 }
 
-async fn create_change_set_internal<Client: CloudFormation>(
-    client: &Client,
+async fn create_change_set_internal(
+    client: &aws_sdk_cloudformation::Client,
     input: ApplyStackInput,
 ) -> Result<Result<ChangeSetWithType, ChangeSetWithType>, ApplyStackError> {
-    let error = match create_change_set(client, input.into_raw()).await {
+    let (change_set_type, input) = input.configure(client.create_change_set());
+    let error = match create_change_set(client, change_set_type, input).await {
         Ok(change_set) => return Ok(Ok(change_set)),
         Err(error) => error,
     };
     match error {
         CreateChangeSetError::NoChanges(change_set) => Ok(Err(change_set)),
-        CreateChangeSetError::CreateApi(error) => Err(ApplyStackError::from_rusoto_error(error)),
-        CreateChangeSetError::PollApi(error) => Err(ApplyStackError::from_rusoto_error(error)),
+        CreateChangeSetError::CreateApi(error) => Err(ApplyStackError::from_sdk_error(error)),
+        CreateChangeSetError::PollApi(error) => Err(ApplyStackError::from_sdk_error(error)),
         CreateChangeSetError::Failed(ChangeSetWithType { change_set, .. }) => {
             Err(ApplyStackError::CreateChangeSetFailed {
                 id: change_set.change_set_id,
@@ -816,17 +838,15 @@ async fn create_change_set_internal<Client: CloudFormation>(
     }
 }
 
-async fn describe_output<Client: CloudFormation>(
-    client: &Client,
+async fn describe_output(
+    client: &aws_sdk_cloudformation::Client,
     stack_id: String,
 ) -> Result<ApplyStackOutput, ApplyStackError> {
-    let describe_stacks_input = DescribeStacksInput {
-        stack_name: Some(stack_id),
-        ..DescribeStacksInput::default()
-    };
     let stack = client
-        .describe_stacks(describe_stacks_input)
-        .map_err(ApplyStackError::from_rusoto_error)
+        .describe_stacks()
+        .stack_name(stack_id)
+        .send()
+        .map_err(ApplyStackError::from_sdk_error)
         .await?
         .stacks
         .expect("DescribeStacksOutput without stacks")

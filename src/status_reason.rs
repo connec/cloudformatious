@@ -2,10 +2,9 @@
 
 use std::fmt;
 
+use aws_sdk_sts::{error::DecodeAuthorizationMessageError, types::SdkError};
 use lazy_static::lazy_static;
 use regex::Regex;
-use rusoto_core::RusotoError;
-use rusoto_sts::{DecodeAuthorizationMessageError, DecodeAuthorizationMessageRequest, Sts};
 
 /// A wrapper around a status reason that offers additional detail.
 ///
@@ -187,12 +186,12 @@ impl<'a> EncodedAuthorizationMessage<'a> {
     /// Any errors encountered when invoking the `sts:DecodeAuthorizationMessage` API are returned.
     pub async fn decode(
         &self,
-        sts: &impl Sts,
+        sts: &aws_sdk_sts::Client,
     ) -> Result<serde_json::Value, EncodedAuthorizationMessageDecodeError> {
         let output = sts
-            .decode_authorization_message(DecodeAuthorizationMessageRequest {
-                encoded_message: self.0.to_owned(),
-            })
+            .decode_authorization_message()
+            .encoded_message(self.0.to_owned())
+            .send()
             .await?;
         let message = output
             .decoded_message
@@ -217,8 +216,8 @@ impl std::error::Error for EncodedAuthorizationMessageDecodeError {
     }
 }
 
-impl From<RusotoError<DecodeAuthorizationMessageError>> for EncodedAuthorizationMessageDecodeError {
-    fn from(error: RusotoError<DecodeAuthorizationMessageError>) -> Self {
+impl From<SdkError<DecodeAuthorizationMessageError>> for EncodedAuthorizationMessageDecodeError {
+    fn from(error: SdkError<DecodeAuthorizationMessageError>) -> Self {
         Self(error.into())
     }
 }

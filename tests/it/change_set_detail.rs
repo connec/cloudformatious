@@ -1,12 +1,12 @@
+use aws_sdk_cloudformation::model::Tag;
 use enumset::EnumSet;
-use rusoto_cloudformation::Tag;
 
 use cloudformatious::{
     change_set::{
         Action, Evaluation, ModifyDetail, ModifyScope, Replacement, ResourceChange,
         ResourceChangeDetail, ResourceTargetDefinition,
     },
-    ApplyStackInput, CloudFormatious, Parameter, TemplateSource,
+    ApplyStackInput, Parameter, TemplateSource,
 };
 
 use crate::common::{
@@ -15,7 +15,7 @@ use crate::common::{
 
 #[tokio::test]
 async fn changes_tags_only() -> Result<(), Box<dyn std::error::Error>> {
-    let client = get_client();
+    let client = get_client().await;
 
     let stack_name = generated_name();
     let mut input = ApplyStackInput::new(&stack_name, TemplateSource::inline(NON_EMPTY_TEMPLATE))
@@ -31,10 +31,7 @@ async fn changes_tags_only() -> Result<(), Box<dyn std::error::Error>> {
         .expect("missing SubnetId output")
         .value;
 
-    input = input.set_tags([Tag {
-        key: "hello".to_string(),
-        value: "world".to_string(),
-    }]);
+    input = input.set_tags([Tag::builder().key("hello").value("world").build()]);
     let change_set = client.apply_stack(input).change_set().await?;
 
     assert_eq!(
@@ -55,14 +52,14 @@ async fn changes_tags_only() -> Result<(), Box<dyn std::error::Error>> {
         }]
     );
 
-    clean_up(&client, stack_name).await?;
+    clean_up(stack_name).await?;
 
     Ok(())
 }
 
 #[tokio::test]
 async fn secrets_manager_secret_tags_only() -> Result<(), Box<dyn std::error::Error>> {
-    let client = get_client();
+    let client = get_client().await;
 
     let stack_name = generated_name();
     let mut input =
@@ -93,7 +90,7 @@ async fn secrets_manager_secret_tags_only() -> Result<(), Box<dyn std::error::Er
         .iter()
         .all(|target| matches!(target, ResourceTargetDefinition::Tags)));
 
-    clean_up(&client, stack_name).await?;
+    clean_up(stack_name).await?;
 
     Ok(())
 }

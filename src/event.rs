@@ -1,6 +1,7 @@
 //! Types representing CloudFormation stack events.
 #![allow(clippy::module_name_repetitions)]
 
+use aws_smithy_types_convert::date_time::DateTimeExt;
 use chrono::{DateTime, Utc};
 
 use crate::{status_reason::StatusReason, ResourceStatus, StackStatus, Status};
@@ -138,14 +139,14 @@ impl StackEvent {
         }
     }
 
-    pub(crate) fn from_raw(event: rusoto_cloudformation::StackEvent) -> Self {
-        let is_stack = event.physical_resource_id.as_deref() == Some(&event.stack_id);
+    pub(crate) fn from_sdk(event: aws_sdk_cloudformation::model::StackEvent) -> Self {
+        let is_stack = event.physical_resource_id.as_deref() == event.stack_id.as_deref();
         let resource_status = event
             .resource_status
             .expect("StackEvent without resource_status");
         let details = StackEventDetails {
             client_request_token: event.client_request_token,
-            event_id: event.event_id,
+            event_id: event.event_id.expect("StackEvent without event_id"),
             logical_resource_id: event
                 .logical_resource_id
                 .expect("StackEvent without logical_resource_id"),
@@ -154,20 +155,27 @@ impl StackEvent {
             resource_type: event
                 .resource_type
                 .expect("StackEvent without resource_type"),
-            stack_id: event.stack_id,
-            stack_name: event.stack_name,
-            timestamp: DateTime::parse_from_rfc3339(&event.timestamp)
-                .expect("StackEvent invalid timestamp")
-                .into(),
+            stack_id: event.stack_id.expect("StackEvent without stack_id"),
+            stack_name: event.stack_name.expect("StackEvent without stack_name"),
+            timestamp: event
+                .timestamp
+                .expect("StackEvent without timestamp")
+                .to_chrono_utc(),
         };
         if is_stack {
             Self::Stack {
-                resource_status: resource_status.parse().expect("invalid stack status"),
+                resource_status: resource_status
+                    .as_str()
+                    .parse()
+                    .expect("invalid stack status"),
                 details,
             }
         } else {
             Self::Resource {
-                resource_status: resource_status.parse().expect("invalid resource status"),
+                resource_status: resource_status
+                    .as_str()
+                    .parse()
+                    .expect("invalid resource status"),
                 details,
             }
         }
