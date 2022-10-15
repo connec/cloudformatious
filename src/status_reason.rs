@@ -192,7 +192,8 @@ impl<'a> EncodedAuthorizationMessage<'a> {
             .decode_authorization_message()
             .encoded_message(self.0.to_owned())
             .send()
-            .await?;
+            .await
+            .map_err(EncodedAuthorizationMessageDecodeError::from_sdk)?;
         let message = output
             .decoded_message
             .expect("decode authorization message response without decoded_message");
@@ -204,6 +205,12 @@ impl<'a> EncodedAuthorizationMessage<'a> {
 #[derive(Debug)]
 pub struct EncodedAuthorizationMessageDecodeError(Box<dyn std::error::Error>);
 
+impl EncodedAuthorizationMessageDecodeError {
+    fn from_sdk(error: SdkError<DecodeAuthorizationMessageError>) -> Self {
+        Self(error.into())
+    }
+}
+
 impl fmt::Display for EncodedAuthorizationMessageDecodeError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{}", self.0)
@@ -213,12 +220,6 @@ impl fmt::Display for EncodedAuthorizationMessageDecodeError {
 impl std::error::Error for EncodedAuthorizationMessageDecodeError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         self.0.source()
-    }
-}
-
-impl From<SdkError<DecodeAuthorizationMessageError>> for EncodedAuthorizationMessageDecodeError {
-    fn from(error: SdkError<DecodeAuthorizationMessageError>) -> Self {
-        Self(error.into())
     }
 }
 

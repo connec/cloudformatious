@@ -1,4 +1,3 @@
-use aws_sdk_cloudformation::model::Tag;
 use enumset::EnumSet;
 
 use cloudformatious::{
@@ -6,7 +5,7 @@ use cloudformatious::{
         Action, Evaluation, ModifyDetail, ModifyScope, Replacement, ResourceChange,
         ResourceChangeDetail, ResourceTargetDefinition,
     },
-    ApplyStackInput, Parameter, TemplateSource,
+    ApplyStackInput, Parameter, Tag, TemplateSource,
 };
 
 use crate::common::{
@@ -31,7 +30,10 @@ async fn changes_tags_only() -> Result<(), Box<dyn std::error::Error>> {
         .expect("missing SubnetId output")
         .value;
 
-    input = input.set_tags([Tag::builder().key("hello").value("world").build()]);
+    input = input.set_tags([Tag {
+        key: "hello".to_string(),
+        value: "world".to_string(),
+    }]);
     let change_set = client.apply_stack(input).change_set().await?;
 
     assert_eq!(
