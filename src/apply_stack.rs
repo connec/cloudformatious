@@ -4,9 +4,7 @@ use std::{fmt, future::Future, pin::Pin, task};
 
 use async_stream::try_stream;
 use aws_sdk_cloudformation::{
-    client::fluent_builders::CreateChangeSet,
-    model::{Stack, Tag},
-    types::SdkError,
+    client::fluent_builders::CreateChangeSet, model::Stack, types::SdkError,
 };
 use aws_smithy_types_convert::date_time::DateTimeExt;
 use chrono::{DateTime, Utc};
@@ -19,7 +17,7 @@ use crate::{
         CreateChangeSetError,
     },
     stack::StackOperationError,
-    ChangeSetStatus, StackEvent, StackFailure, StackStatus, StackWarning,
+    ChangeSetStatus, StackEvent, StackFailure, StackStatus, StackWarning, Tag,
 };
 
 /// The input for the `apply_stack` operation.
@@ -28,8 +26,7 @@ use crate::{
 /// also available to make construction as ergonomic as possible.
 ///
 /// ```no_run
-/// use aws_sdk_cloudformation::model::Tag;
-/// use cloudformatious::{ApplyStackInput, Capability, Parameter, TemplateSource};
+/// use cloudformatious::{ApplyStackInput, Capability, Parameter, Tag, TemplateSource};
 ///
 /// # #[tokio::main]
 /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -42,7 +39,7 @@ use crate::{
 ///     .set_parameters([Parameter { key: "hello".to_string(), value: "world".to_string() }])
 ///     .set_resource_types(["AWS::IAM::Role"])
 ///     .set_role_arn("arn:foo")
-///     .set_tags([Tag::builder().key("hello").value("world").build()]);
+///     .set_tags([Tag { key: "hello".to_string(), value: "world".to_string() }]);
 /// let output = client.apply_stack(input).await?;
 /// // ...
 /// # Ok(())
@@ -253,7 +250,7 @@ impl ApplyStackInput {
             .set_resource_types(self.resource_types)
             .set_role_arn(self.role_arn)
             .stack_name(self.stack_name)
-            .set_tags(Some(self.tags))
+            .set_tags(Some(self.tags.into_iter().map(Tag::into_sdk).collect()))
             .set_template_body(template_body)
             .set_template_url(template_url);
 
@@ -412,7 +409,7 @@ impl TemplateSource {
 }
 
 /// The output of the `apply_stack` operation.
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Eq, PartialEq)]
 #[allow(clippy::module_name_repetitions)]
 pub struct ApplyStackOutput {
     /// The unique ID of the change set.
@@ -482,7 +479,12 @@ impl ApplyStackOutput {
                 .as_str()
                 .parse()
                 .expect("invalid stack status"),
-            tags: stack.tags.unwrap_or_default(),
+            tags: stack
+                .tags
+                .unwrap_or_default()
+                .into_iter()
+                .map(Tag::from_sdk)
+                .collect(),
         }
     }
 }

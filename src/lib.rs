@@ -5,6 +5,7 @@ mod delete_stack;
 mod event;
 mod stack;
 mod status;
+mod tag;
 
 pub mod change_set;
 pub mod status_reason;
@@ -21,6 +22,7 @@ pub use stack::{StackFailure, StackWarning};
 pub use status::{
     ChangeSetStatus, InvalidStatus, ResourceStatus, StackStatus, Status, StatusSentiment,
 };
+pub use tag::Tag;
 
 /// A client for performing cloudformatious operations.
 pub struct Client {

@@ -5,7 +5,7 @@ use std::{fmt, time::Duration};
 use aws_sdk_cloudformation::{
     client::fluent_builders::CreateChangeSet,
     error::{DescribeChangeSetError, ExecuteChangeSetError},
-    model::{Change, ChangeAction, Parameter, Tag},
+    model::{Change, ChangeAction},
     output::DescribeChangeSetOutput,
     types::SdkError,
 };
@@ -18,7 +18,7 @@ use tokio::time::{interval_at, Instant};
 
 use crate::{
     stack::{StackOperation, StackOperationStatus},
-    Capability, ChangeSetStatus, StackStatus,
+    Capability, ChangeSetStatus, StackStatus, Tag,
 };
 
 const POLL_INTERVAL_CHANGE_SET: Duration = Duration::from_secs(1);
@@ -48,7 +48,7 @@ impl fmt::Display for ChangeSetType {
 }
 
 /// A planned set of changes to apply to a CloudFormation stack.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 #[allow(clippy::module_name_repetitions)]
 pub struct ChangeSet {
     /// Capabilities that were explicitly acknowledged when the change set was created.
@@ -149,7 +149,12 @@ impl ChangeSet {
                 .parse()
                 .expect("DescribeChangeSetOutput with invalid execution_status"),
             notification_arns: change_set.notification_ar_ns.unwrap_or_default(),
-            parameters: change_set.parameters.unwrap_or_default(),
+            parameters: change_set
+                .parameters
+                .unwrap_or_default()
+                .into_iter()
+                .map(Parameter::from_sdk)
+                .collect(),
             stack_id: change_set
                 .stack_id
                 .expect("DescribeChangeSetOutput without stack_id"),
@@ -163,7 +168,12 @@ impl ChangeSet {
                 .parse()
                 .expect("DescribeChangeSetOutput unexpected status"),
             status_reason: change_set.status_reason,
-            tags: change_set.tags.unwrap_or_default(),
+            tags: change_set
+                .tags
+                .unwrap_or_default()
+                .into_iter()
+                .map(Tag::from_sdk)
+                .collect(),
         }
     }
 }
@@ -193,6 +203,42 @@ pub enum ExecutionStatus {
 
 forward_display_to_serde!(ExecutionStatus);
 forward_from_str_to_serde!(ExecutionStatus);
+
+/// A parameter set for a change set.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Parameter {
+    /// The key associated with the parameter.
+    pub parameter_key: String,
+
+    /// The input value associated with the parameter.
+    ///
+    /// If you don't specify a key and value for a particular parameter, CloudFormation uses the
+    /// default or previous value that's specified in your template.
+    pub parameter_value: Option<String>,
+
+    /// The existing parameter value will be used on update.
+    pub use_previous_value: Option<bool>,
+
+    /// The value that corresponds to a SSM parameter key.
+    ///
+    /// This field is returned only for [`SSM`] parameter types in the template.
+    ///
+    /// [`SSM`]: https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/parameters-section-structure.html#aws-ssm-parameter-types
+    pub resolved_value: Option<String>,
+}
+
+impl Parameter {
+    fn from_sdk(param: aws_sdk_cloudformation::model::Parameter) -> Self {
+        Self {
+            parameter_key: param
+                .parameter_key
+                .expect("Parameter without parameter_key"),
+            parameter_value: param.parameter_value,
+            use_previous_value: param.use_previous_value,
+            resolved_value: param.resolved_value,
+        }
+    }
+}
 
 /// The resource and the action that AWS CloudFormation will perform on it if you execute this
 /// change set.
