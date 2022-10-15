@@ -5,7 +5,7 @@
 
 An extension trait for [`rusoto_cloudformation::CloudFormationClient`](https://docs.rs/rusoto_cloudformation/0.46.0/rusoto_cloudformation/struct.CloudFormationClient.html) offering richly typed higher-level APIs to perform long-running operations and await their termination or observe their progress.
 
-```rust + no_run
+```rust,no_run
 use futures_util::StreamExt;
 use rusoto_cloudformation::CloudFormationClient;
 use rusoto_core::Region;
