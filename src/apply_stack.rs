@@ -9,7 +9,6 @@ use aws_sdk_cloudformation::{
 use aws_smithy_types_convert::date_time::DateTimeExt;
 use chrono::{DateTime, Utc};
 use futures_util::{Stream, TryFutureExt, TryStreamExt};
-use serde_plain::{forward_display_to_serde, forward_from_str_to_serde};
 
 use crate::{
     change_set::{
@@ -316,18 +315,18 @@ impl ApplyStackInput {
 /// [2]: http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/template-macros.html
 /// [`AWS::Include`]: http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/create-reusable-transform-function-snippets-and-add-to-your-template-with-aws-include-transform.html
 /// [`AWS::Serverless`]: http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/transform-aws-serverless.html
-#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, parse_display::Display, parse_display::FromStr)]
 pub enum Capability {
     /// Acknowledge IAM resources (*without* custom names only).
-    #[serde(rename = "CAPABILITY_IAM")]
+    #[display("CAPABILITY_IAM")]
     Iam,
 
     /// Acknowledge IAM resources (with or without custom names).
-    #[serde(rename = "CAPABILITY_NAMED_IAM")]
+    #[display("CAPABILITY_NAMED_IAM")]
     NamedIam,
 
     /// Acknowledge macro expansion.
-    #[serde(rename = "CAPABILITY_AUTO_EXPAND")]
+    #[display("CAPABILITY_AUTO_EXPAND")]
     AutoExpand,
 }
 
@@ -340,9 +339,6 @@ impl Capability {
         }
     }
 }
-
-forward_display_to_serde!(Capability);
-forward_from_str_to_serde!(Capability);
 
 /// An input parameter for an `apply_stack` operation.
 ///
@@ -855,4 +851,25 @@ async fn describe_output(
         .pop()
         .expect("DescribeStacksOutput empty stacks");
     Ok(ApplyStackOutput::from_raw(stack))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Capability;
+
+    #[test]
+    fn test_parse_display() {
+        assert_eq!(Capability::Iam.to_string(), "CAPABILITY_IAM");
+        assert_eq!(Capability::Iam, "CAPABILITY_IAM".parse().unwrap());
+        assert_eq!(Capability::NamedIam.to_string(), "CAPABILITY_NAMED_IAM");
+        assert_eq!(
+            Capability::NamedIam,
+            "CAPABILITY_NAMED_IAM".parse().unwrap(),
+        );
+        assert_eq!(Capability::AutoExpand.to_string(), "CAPABILITY_AUTO_EXPAND");
+        assert_eq!(
+            Capability::AutoExpand,
+            "CAPABILITY_AUTO_EXPAND".parse().unwrap(),
+        );
+    }
 }
