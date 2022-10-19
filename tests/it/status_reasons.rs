@@ -6,7 +6,7 @@ use cloudformatious::{
 };
 
 use crate::common::{
-    clean_up, generated_name, get_client, get_sts_client, AUTHORIZATION_FAILURE_TEMPLATE,
+    clean_up, generated_name, get_client, get_sdk_config, AUTHORIZATION_FAILURE_TEMPLATE,
     MISSING_PERMISSION_1_TEMPLATE, MISSING_PERMISSION_2_TEMPLATE,
 };
 
@@ -47,7 +47,8 @@ async fn status_reason_missing_permission_no_principal() -> Result<(), Box<dyn s
 #[tokio::test]
 async fn status_reason_missing_permission_with_principal() -> Result<(), Box<dyn std::error::Error>>
 {
-    let identity_client = get_sts_client().await;
+    let config = get_sdk_config().await;
+    let identity_client = aws_sdk_sts::Client::new(&config);
     let identity = identity_client.get_caller_identity().send().await.unwrap();
 
     let client = get_client().await;
@@ -110,8 +111,8 @@ async fn status_reason_authorization_failure() -> Result<(), Box<dyn std::error:
       Some(StatusReasonDetail::AuthorizationFailure(m)) => m
     );
 
-    let sts_client = get_sts_client().await;
-    let decoded_message = encoded_message.decode(&sts_client).await?;
+    let sdk_config = get_sdk_config().await;
+    let decoded_message = encoded_message.decode(&sdk_config).await?;
     assert_eq!(decoded_message["context"]["action"], "ec2:CreateVpc");
 
     clean_up(stack_name).await?;

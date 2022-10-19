@@ -2,6 +2,7 @@
 
 use std::fmt;
 
+use aws_config::SdkConfig;
 use aws_sdk_sts::{error::DecodeAuthorizationMessageError, types::SdkError};
 use lazy_static::lazy_static;
 use regex::Regex;
@@ -186,8 +187,9 @@ impl<'a> EncodedAuthorizationMessage<'a> {
     /// Any errors encountered when invoking the `sts:DecodeAuthorizationMessage` API are returned.
     pub async fn decode(
         &self,
-        sts: &aws_sdk_sts::Client,
+        config: &SdkConfig,
     ) -> Result<serde_json::Value, EncodedAuthorizationMessageDecodeError> {
+        let sts = aws_sdk_sts::Client::new(config);
         let output = sts
             .decode_authorization_message()
             .encoded_message(self.0.to_owned())
