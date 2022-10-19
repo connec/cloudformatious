@@ -13,7 +13,6 @@ use aws_smithy_types_convert::date_time::DateTimeExt;
 use chrono::{DateTime, Utc};
 use enumset::EnumSet;
 use futures_util::TryFutureExt;
-use serde_plain::{forward_display_to_serde, forward_from_str_to_serde};
 use tokio::time::{interval_at, Instant};
 
 use crate::{
@@ -179,8 +178,8 @@ impl ChangeSet {
 }
 
 /// The change set's execution status.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, parse_display::Display, parse_display::FromStr)]
+#[display(style = "SNAKE_CASE")]
 pub enum ExecutionStatus {
     /// The change set is not available to execute.
     Unavailable,
@@ -200,9 +199,6 @@ pub enum ExecutionStatus {
     /// The stack was updated by another means after this change set was created.
     Obsolete,
 }
-
-forward_display_to_serde!(ExecutionStatus);
-forward_from_str_to_serde!(ExecutionStatus);
 
 /// A parameter set for a change set.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -420,7 +416,7 @@ impl ModifyDetail {
 /// [`Never`]: RequiresRecreation::Never
 /// [`Static`]: Evaluation::Static
 /// [`Dynamic`]: Evaluation::Dynamic
-#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, parse_display::Display, parse_display::FromStr)]
 pub enum Replacement {
     /// The resource will be replaced.
     True,
@@ -432,9 +428,6 @@ pub enum Replacement {
     Conditional,
 }
 
-forward_display_to_serde!(Replacement);
-forward_from_str_to_serde!(Replacement);
-
 // The derive for EnumSetType creates an item that triggers this lint, so it has to be disabled
 // at the module level. We don't want to disable it too broadly though, so we wrap its declaration
 // in a module and re-export from that.
@@ -442,8 +435,8 @@ mod modify_scope {
     #![allow(clippy::expl_impl_clone_on_copy)]
 
     /// Indicates which resource attribute is triggering this update.
-    #[derive(Debug, enumset::EnumSetType, serde::Deserialize, serde::Serialize)]
-    #[enumset(no_ops, serialize_as_list)]
+    #[derive(Debug, enumset::EnumSetType, parse_display::Display, parse_display::FromStr)]
+    #[enumset(no_ops)]
     pub enum ModifyScope {
         /// A change to the resource's properties.
         Properties,
@@ -465,9 +458,6 @@ mod modify_scope {
     }
 }
 pub use modify_scope::ModifyScope;
-
-forward_display_to_serde!(ModifyScope);
-forward_from_str_to_serde!(ModifyScope);
 
 /// A change that AWS CloudFormation will make to a resource.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -592,7 +582,7 @@ impl ChangeSource {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, parse_display::Display, parse_display::FromStr)]
 pub enum Evaluation {
     /// AWS CloudFormation can determine that the target value will change, and its value.
     ///
@@ -610,9 +600,6 @@ pub enum Evaluation {
     /// physical ID, so all references to that resource will also be updated.
     Dynamic,
 }
-
-forward_display_to_serde!(Evaluation);
-forward_from_str_to_serde!(Evaluation);
 
 /// The field that AWS CloudFormation will change, such as the name of a resource's property, and
 /// whether the resource will be recreated.
@@ -703,7 +690,7 @@ impl ResourceTargetDefinition {
 }
 
 /// Indicates whether a change to a property causes the resource to be recreated.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, parse_display::Display, parse_display::FromStr)]
 pub enum RequiresRecreation {
     /// The resource will not need to be recreated.
     Never,
@@ -717,9 +704,6 @@ pub enum RequiresRecreation {
     /// The resource will need to be recreated.
     Always,
 }
-
-forward_display_to_serde!(RequiresRecreation);
-forward_from_str_to_serde!(RequiresRecreation);
 
 pub(crate) struct ChangeSetWithType {
     pub(crate) change_set: ChangeSet,

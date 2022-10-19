@@ -19,9 +19,7 @@ pub use apply_stack::{
 pub use delete_stack::{DeleteStack, DeleteStackError, DeleteStackEvents, DeleteStackInput};
 pub use event::{StackEvent, StackEventDetails};
 pub use stack::{StackFailure, StackWarning};
-pub use status::{
-    ChangeSetStatus, InvalidStatus, ResourceStatus, StackStatus, Status, StatusSentiment,
-};
+pub use status::{ChangeSetStatus, ResourceStatus, StackStatus, Status, StatusSentiment};
 pub use tag::Tag;
 
 /// A client for performing cloudformatious operations.

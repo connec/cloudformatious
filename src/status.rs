@@ -1,10 +1,6 @@
 //! Types and values representing various CloudFormation statuses.
 #![allow(clippy::module_name_repetitions)]
 
-use std::str::FromStr;
-
-use serde_plain::forward_display_to_serde;
-
 /// Common operations for statuses.
 pub trait Status: std::fmt::Debug + std::fmt::Display + private::Sealed {
     /// Indicates whether or not a status is terminal.
@@ -50,13 +46,9 @@ impl StatusSentiment {
     }
 }
 
-/// An error marker returned when trying to parse an invalid status.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct InvalidStatus;
-
 /// Possible change set statuses.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, parse_display::Display, parse_display::FromStr)]
+#[display(style = "SNAKE_CASE")]
 pub enum ChangeSetStatus {
     CreatePending,
     CreateInProgress,
@@ -91,19 +83,9 @@ impl Status for ChangeSetStatus {
     }
 }
 
-forward_display_to_serde!(ChangeSetStatus);
-
-impl FromStr for ChangeSetStatus {
-    type Err = InvalidStatus;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        serde_plain::from_str(s).map_err(|_| InvalidStatus)
-    }
-}
-
 /// Possible stack statuses.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, parse_display::Display, parse_display::FromStr)]
+#[display(style = "SNAKE_CASE")]
 pub enum StackStatus {
     CreateInProgress,
     CreateFailed,
@@ -185,19 +167,9 @@ impl Status for StackStatus {
     }
 }
 
-forward_display_to_serde!(StackStatus);
-
-impl FromStr for StackStatus {
-    type Err = InvalidStatus;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        serde_plain::from_str(s).map_err(|_| InvalidStatus)
-    }
-}
-
 /// Possible resource statuses.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, parse_display::Display, parse_display::FromStr)]
+#[display(style = "SNAKE_CASE")]
 pub enum ResourceStatus {
     CreateInProgress,
     CreateFailed,
@@ -261,16 +233,6 @@ impl Status for ResourceStatus {
     }
 }
 
-forward_display_to_serde!(ResourceStatus);
-
-impl FromStr for ResourceStatus {
-    type Err = InvalidStatus;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        serde_plain::from_str(s).map_err(|_| InvalidStatus)
-    }
-}
-
 mod private {
     /// An unreachable trait used to prevent some traits from being implemented outside the crate.
     pub trait Sealed {}
@@ -295,7 +257,7 @@ mod tests {
             "UPDATE_ROLLBACK_COMPLETE_CLEANUP_IN_PROGRESS".parse(),
             Ok(StackStatus::UpdateRollbackCompleteCleanupInProgress)
         );
-        assert_eq!("oh no".parse::<StackStatus>(), Err(InvalidStatus));
+        assert!("oh no".parse::<StackStatus>().is_err());
     }
 
     #[test]
@@ -309,6 +271,6 @@ mod tests {
             "IMPORT_ROLLBACK_IN_PROGRESS".parse(),
             Ok(ResourceStatus::ImportRollbackInProgress)
         );
-        assert_eq!("oh no".parse::<ResourceStatus>(), Err(InvalidStatus));
+        assert!("oh no".parse::<ResourceStatus>().is_err());
     }
 }
