@@ -1,3 +1,4 @@
+use aws_config::SdkConfig;
 use cloudformatious::Client;
 
 const NAME_PREFIX: &str = "cloudformatious-testing-";
@@ -97,14 +98,13 @@ pub const SECRETS_MANAGER_SECRET: &str = r#"{
     }
 }"#;
 
+pub async fn get_sdk_config() -> SdkConfig {
+    aws_config::load_from_env().await
+}
+
 pub async fn get_client() -> Client {
     let config = aws_config::load_from_env().await;
     Client::new(&config)
-}
-
-pub async fn get_sts_client() -> aws_sdk_sts::Client {
-    let config = aws_config::load_from_env().await;
-    aws_sdk_sts::Client::new(&config)
 }
 
 pub fn generated_name() -> String {
