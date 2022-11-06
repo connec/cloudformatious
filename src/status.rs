@@ -3,10 +3,10 @@
 
 /// Common operations for statuses.
 pub trait Status: std::fmt::Debug + std::fmt::Display + private::Sealed {
-    /// Indicates whether or not a status is terminal.
+    /// Indicates whether or not a status is settled.
     ///
-    /// A terminal status is one that won't change again during the current stack operation.
-    fn is_terminal(&self) -> bool;
+    /// A settled status is one that won't change again during the current stack operation.
+    fn is_settled(&self) -> bool;
 
     /// Indicates the sentiment of the status.
     ///
@@ -61,7 +61,7 @@ pub enum ChangeSetStatus {
 }
 
 impl Status for ChangeSetStatus {
-    fn is_terminal(&self) -> bool {
+    fn is_settled(&self) -> bool {
         match self {
             Self::CreatePending
             | Self::CreateInProgress
@@ -112,7 +112,7 @@ pub enum StackStatus {
 }
 
 impl Status for StackStatus {
-    fn is_terminal(&self) -> bool {
+    fn is_settled(&self) -> bool {
         match self {
             Self::CreateInProgress
             | Self::RollbackInProgress
@@ -190,7 +190,7 @@ pub enum ResourceStatus {
 }
 
 impl Status for ResourceStatus {
-    fn is_terminal(&self) -> bool {
+    fn is_settled(&self) -> bool {
         match self {
             Self::CreateInProgress
             | Self::DeleteInProgress
