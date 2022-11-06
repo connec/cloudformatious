@@ -834,9 +834,9 @@ fn is_already_exists(
 }
 
 fn is_no_changes(status_reason: Option<&str>) -> bool {
-    status_reason
-        .unwrap_or_default()
-        .contains("The submitted information didn't contain changes.")
+    let status_reason = status_reason.unwrap_or_default();
+    status_reason.contains("The submitted information didn't contain changes.")
+        || status_reason.contains("No updates are to be performed.")
 }
 
 fn check_create_progress(stack_status: StackStatus) -> StackOperationStatus {

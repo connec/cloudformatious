@@ -6,7 +6,9 @@ use cloudformatious::{
     TemplateSource,
 };
 
-use crate::common::{clean_up, generated_name, get_client, EMPTY_TEMPLATE};
+use crate::common::{
+    clean_up, generated_name, get_client, EMPTY_TEMPLATE, EMPTY_TEMPLATE_WITH_TRANSFORM,
+};
 
 const FAILING_TEMPLATE: &str = r#"
             {
@@ -214,6 +216,39 @@ async fn apply_overall_idempotent() -> Result<(), Box<dyn std::error::Error>> {
 
     let stack_name = generated_name();
     let input = ApplyStackInput::new(&stack_name, TemplateSource::inline(EMPTY_TEMPLATE));
+
+    let mut apply = client.apply_stack(input.clone());
+    let change_set = apply.change_set().await?;
+    assert_eq!(change_set.status, ChangeSetStatus::CreateComplete);
+    assert_eq!(change_set.execution_status, ExecutionStatus::Available);
+    assert!(change_set.changes.is_empty());
+    let output1 = apply.await?;
+
+    let mut apply = client.apply_stack(input);
+    let change_set = apply.change_set().await?;
+    assert_eq!(change_set.status, ChangeSetStatus::Failed);
+    assert!(change_set.status_reason.is_some());
+    assert_eq!(change_set.execution_status, ExecutionStatus::Unavailable);
+    assert!(change_set.changes.is_empty());
+    let output2 = apply.await?;
+
+    assert_eq!(output2.stack_status, StackStatus::CreateComplete);
+    assert_eq!(output1, output2);
+
+    clean_up(stack_name).await?;
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn apply_overall_idempotent_with_transform() -> Result<(), Box<dyn std::error::Error>> {
+    let client = get_client().await;
+
+    let stack_name = generated_name();
+    let input = ApplyStackInput::new(
+        &stack_name,
+        TemplateSource::inline(EMPTY_TEMPLATE_WITH_TRANSFORM),
+    );
 
     let mut apply = client.apply_stack(input.clone());
     let change_set = apply.change_set().await?;

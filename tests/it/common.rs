@@ -15,6 +15,19 @@ pub const EMPTY_TEMPLATE: &str = r#"{
     }
 }"#;
 
+pub const EMPTY_TEMPLATE_WITH_TRANSFORM: &str = r#"{
+    "Transform": "AWS::Serverless-2016-10-31",
+    "Conditions": {
+        "Never": { "Fn::Equals": [true, false] }
+    },
+    "Resources": {
+        "Fake": {
+            "Type": "Custom::Fake",
+            "Condition": Never
+        }
+    }
+}"#;
+
 pub const NON_EMPTY_TEMPLATE: &str = r#"{
     "Parameters": {
         "CidrBlock": {

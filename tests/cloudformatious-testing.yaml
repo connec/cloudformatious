@@ -19,6 +19,11 @@ Resources:
               - cloudformation:DescribeStacks
               - cloudformation:ExecuteChangeSet
             Resource: arn:aws:cloudformation:*:*:stack/cloudformatious-testing-*
+          - Sid: TransformOperations
+            Effect: Allow
+            Action:
+              - cloudformation:CreateChangeSet
+            Resource: arn:aws:cloudformation:eu-west-2:aws:transform/Serverless-2016-10-31
           - Sid: CreateSubnet
             Effect: Allow
             Action:
