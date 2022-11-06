@@ -133,7 +133,7 @@ impl StackEvent {
             resource_status, ..
         } = self
         {
-            resource_status.is_terminal()
+            resource_status.is_settled()
         } else {
             false
         }
