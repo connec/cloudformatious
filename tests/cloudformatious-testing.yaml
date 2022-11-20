@@ -52,11 +52,20 @@ Resources:
               - secretsmanager:DeleteSecret
               - secretsmanager:TagResource
             Resource: !Sub arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:cloudformatious-testing-*
+          - Sid: UseRoles
+            Effect: Allow
+            Action: iam:PassRole
+            Resource:
+              - !GetAtt Testing.Arn
+              - !GetAtt DenyDeleteSubnet.Arn
           - Sid: DecodeAuthorizationMessage
             Effect: Allow
             Action:
               - sts:DecodeAuthorizationMessage
             Resource: '*'
+      Roles:
+        - !Ref Testing
+        - !Ref DenyDeleteSubnet
 
   Vpc:
     Type: AWS::EC2::VPC
@@ -65,6 +74,40 @@ Resources:
       Tags:
         - Key: Name
           Value: !Ref AWS::StackName
+
+  Testing:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action: sts:AssumeRole
+            Principal:
+              Service: cloudformation.amazonaws.com
+      RoleName: cloudformatious-testing
+
+  DenyDeleteSubnet:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action: sts:AssumeRole
+            Principal:
+              Service: cloudformation.amazonaws.com
+      Policies:
+        - PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: DenyDeleteSubnet
+                Effect: Deny
+                Action:
+                  - ec2:DeleteSubnet
+                Resource: '*'
+          PolicyName: DenyDeleteSubnet
+      RoleName: cloudformatious-testing-deny-delete-subnet
 
 Outputs:
   PolicyArn:
