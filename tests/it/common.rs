@@ -39,12 +39,6 @@ pub const NON_EMPTY_TEMPLATE: &str = r#"{
             "Type": "AWS::EC2::Subnet",
             "Properties": {
                 "CidrBlock": {"Ref": "CidrBlock"},
-                "Tags": [
-                    {
-                        "Key": "VpcId",
-                        "Value": {"Fn::ImportValue": "cloudformatious-testing-VpcId"}
-                    }
-                ],
                 "VpcId": {"Fn::ImportValue": "cloudformatious-testing-VpcId"}
             }
         }
