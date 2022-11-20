@@ -99,6 +99,7 @@ pub enum StackStatus {
     UpdateInProgress,
     UpdateCompleteCleanupInProgress,
     UpdateComplete,
+    UpdateFailed,
     UpdateRollbackInProgress,
     UpdateRollbackFailed,
     UpdateRollbackCompleteCleanupInProgress,
@@ -131,6 +132,7 @@ impl Status for StackStatus {
             | Self::DeleteFailed
             | Self::DeleteComplete
             | Self::UpdateComplete
+            | Self::UpdateFailed
             | Self::UpdateRollbackFailed
             | Self::UpdateRollbackComplete
             | Self::ImportComplete
@@ -156,6 +158,7 @@ impl Status for StackStatus {
             | Self::RollbackFailed
             | Self::RollbackComplete
             | Self::DeleteFailed
+            | Self::UpdateFailed
             | Self::UpdateRollbackInProgress
             | Self::UpdateRollbackFailed
             | Self::UpdateRollbackCompleteCleanupInProgress

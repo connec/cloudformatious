@@ -805,6 +805,7 @@ pub(crate) async fn execute_change_set(
     stack_id: String,
     change_set_id: String,
     change_set_type: ChangeSetType,
+    disable_rollback: bool,
 ) -> Result<
     StackOperation<'_, impl Fn(StackStatus) -> StackOperationStatus + Unpin>,
     SdkError<ExecuteChangeSetError>,
@@ -812,6 +813,7 @@ pub(crate) async fn execute_change_set(
     let started_at = Utc::now();
     client
         .execute_change_set()
+        .set_disable_rollback(Some(disable_rollback))
         .change_set_name(change_set_id)
         .send()
         .await?;
@@ -859,9 +861,9 @@ fn check_update_progress(stack_status: StackStatus) -> StackOperationStatus {
         | StackStatus::UpdateRollbackInProgress
         | StackStatus::UpdateRollbackCompleteCleanupInProgress => StackOperationStatus::InProgress,
         StackStatus::UpdateComplete => StackOperationStatus::Complete,
-        StackStatus::UpdateRollbackFailed | StackStatus::UpdateRollbackComplete => {
-            StackOperationStatus::Failed
-        }
+        StackStatus::UpdateFailed
+        | StackStatus::UpdateRollbackFailed
+        | StackStatus::UpdateRollbackComplete => StackOperationStatus::Failed,
         _ => StackOperationStatus::Unexpected,
     }
 }

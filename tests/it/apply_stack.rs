@@ -274,6 +274,46 @@ async fn apply_overall_idempotent_with_transform() -> Result<(), Box<dyn std::er
 }
 
 #[tokio::test]
+async fn create_stack_fut_err_disable_rollback() -> Result<(), Box<dyn std::error::Error>> {
+    let client = get_client().await;
+
+    let stack_name = generated_name();
+    let input = ApplyStackInput::new(&stack_name, TemplateSource::inline(FAILING_TEMPLATE))
+        .set_disable_rollback(true);
+    let error = client.apply_stack(input).await.unwrap_err();
+    if let ApplyStackError::Failure(StackFailure {
+        stack_status,
+        stack_status_reason,
+        resource_events,
+        ..
+    }) = error
+    {
+        assert_eq!(stack_status, StackStatus::CreateFailed);
+        assert!(stack_status_reason.contains("resource(s) failed to create: [Vpc]"));
+        let resource_errors = resource_events
+            .iter()
+            .map(|(status, details)| {
+                (
+                    details.logical_resource_id(),
+                    *status,
+                    details.resource_status_reason().inner(),
+                )
+            })
+            .collect::<Vec<_>>();
+        assert!(matches!(
+            &resource_errors[..],
+            [("Vpc", ResourceStatus::CreateFailed, Some(_))]
+        ));
+    } else {
+        return Err(error.into());
+    }
+
+    clean_up(stack_name).await?;
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn create_stack_fut_err() -> Result<(), Box<dyn std::error::Error>> {
     let client = get_client().await;
 
@@ -409,6 +449,50 @@ async fn update_stack_fut_err() -> Result<(), Box<dyn std::error::Error>> {
     }) = error
     {
         assert_eq!(stack_status, StackStatus::UpdateRollbackComplete);
+        assert!(stack_status_reason.contains("resource(s) failed to create: [Vpc]"));
+        let resource_errors = resource_events
+            .iter()
+            .map(|(status, details)| {
+                (
+                    details.logical_resource_id(),
+                    *status,
+                    details.resource_status_reason().inner(),
+                )
+            })
+            .collect::<Vec<_>>();
+        assert!(matches!(
+            &resource_errors[..],
+            [("Vpc", ResourceStatus::CreateFailed, Some(_))]
+        ));
+    } else {
+        return Err(error.into());
+    }
+
+    clean_up(stack_name).await?;
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn update_stack_fut_err_disable_rollback() -> Result<(), Box<dyn std::error::Error>> {
+    let client = get_client().await;
+
+    let stack_name = generated_name();
+    let input = ApplyStackInput::new(&stack_name, TemplateSource::inline(EMPTY_TEMPLATE));
+    let output = client.apply_stack(input).await?;
+    assert_eq!(output.stack_status, StackStatus::CreateComplete);
+
+    let input = ApplyStackInput::new(&stack_name, TemplateSource::inline(FAILING_TEMPLATE))
+        .set_disable_rollback(true);
+    let error = client.apply_stack(input).await.unwrap_err();
+    if let ApplyStackError::Failure(StackFailure {
+        stack_status,
+        stack_status_reason,
+        resource_events,
+        ..
+    }) = error
+    {
+        assert_eq!(stack_status, StackStatus::UpdateFailed);
         assert!(stack_status_reason.contains("resource(s) failed to create: [Vpc]"));
         let resource_errors = resource_events
             .iter()
