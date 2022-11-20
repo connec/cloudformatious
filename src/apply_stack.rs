@@ -62,6 +62,13 @@ pub struct ApplyStackInput {
     /// which are used to track operations.
     pub client_request_token: Option<String>,
 
+    /// Whether or not to disable rolling back in the event of a failure.
+    ///
+    /// When rollback is disabled, resources that were created/updated before the failing operation
+    /// are preserved and the stack settles with a `*_FAILED` status. This may be helpful when
+    /// debugging failing stack operations.
+    pub disable_rollback: bool,
+
     /// The Simple Notification Service (SNS) topic ARNs to publish stack related events.
     ///
     /// You can find your SNS topic ARNs using the SNS console or your Command Line Interface (CLI).
@@ -141,6 +148,7 @@ impl ApplyStackInput {
 
             capabilities: Vec::new(),
             client_request_token: None,
+            disable_rollback: false,
             notification_arns: Vec::new(),
             parameters: Vec::new(),
             resource_types: None,
@@ -164,6 +172,15 @@ impl ApplyStackInput {
     #[must_use]
     pub fn set_client_request_token(mut self, client_request_token: impl Into<String>) -> Self {
         self.client_request_token = Some(client_request_token.into());
+        self
+    }
+
+    /// Set the value for `disable_rollback`.
+    ///
+    /// **Note:** this consumes and returns `self` for chaining.
+    #[must_use]
+    pub fn set_disable_rollback(mut self, disable_rollback: bool) -> Self {
+        self.disable_rollback = disable_rollback;
         self
     }
 
@@ -631,6 +648,8 @@ impl<'client> ApplyStack<'client> {
         client: &'client aws_sdk_cloudformation::Client,
         input: ApplyStackInput,
     ) -> Self {
+        let disable_rollback = input.disable_rollback;
+
         let event_stream = try_stream! {
             let (stack_id, change_set_id, change_set_type) =
                 match create_change_set_internal(client, input).await? {
@@ -654,7 +673,7 @@ impl<'client> ApplyStack<'client> {
                 };
 
             let mut operation =
-                execute_change_set(client, stack_id.clone(), change_set_id, change_set_type)
+                execute_change_set(client, stack_id.clone(), change_set_id, change_set_type, disable_rollback)
                     .await
                     .map_err(ApplyStackError::from_sdk_error)?;
             while let Some(event) = operation
