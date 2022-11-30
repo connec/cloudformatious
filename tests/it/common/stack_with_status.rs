@@ -1,12 +1,12 @@
 use assert_matches::assert_matches;
 use cloudformatious::{
-    ApplyStackError, ApplyStackInput, DeleteStackError, DeleteStackInput, Parameter, StackFailure,
-    StackStatus, TemplateSource,
+    ApplyStackError, ApplyStackInput, Client, DeleteStackError, DeleteStackInput, Parameter,
+    StackFailure, StackStatus, TemplateSource,
 };
 
 use crate::common::{get_role_arn, TestingRole, EMPTY_TEMPLATE};
 
-use super::{generated_name, get_client, NON_EMPTY_TEMPLATE};
+use super::{generated_name, NON_EMPTY_TEMPLATE};
 
 const FAILING_TEMPLATE: &str = r#"{
     "Resources": {
@@ -46,8 +46,7 @@ pub const ROLLBACK_FAILING_TEMPLATE: &str = r#"{
     }
 }"#;
 
-pub async fn create_failed() -> StackFailure {
-    let client = get_client().await;
+pub async fn create_failed(client: &Client) -> StackFailure {
     let error = client
         .apply_stack(
             ApplyStackInput::new(generated_name(), TemplateSource::inline(FAILING_TEMPLATE))
@@ -60,8 +59,7 @@ pub async fn create_failed() -> StackFailure {
     failure
 }
 
-pub async fn rollback_failed() -> StackFailure {
-    let client = get_client().await;
+pub async fn rollback_failed(client: &Client) -> StackFailure {
     let error = client
         .apply_stack(
             ApplyStackInput::new(
@@ -81,8 +79,7 @@ pub async fn rollback_failed() -> StackFailure {
     failure
 }
 
-pub async fn delete_failed() -> StackFailure {
-    let client = get_client().await;
+pub async fn delete_failed(client: &Client) -> StackFailure {
     let output = client
         .apply_stack(
             ApplyStackInput::new(generated_name(), TemplateSource::inline(NON_EMPTY_TEMPLATE))
@@ -106,8 +103,7 @@ pub async fn delete_failed() -> StackFailure {
     failure
 }
 
-pub async fn update_failed() -> StackFailure {
-    let client = get_client().await;
+pub async fn update_failed(client: &Client) -> StackFailure {
     let output = client
         .apply_stack(ApplyStackInput::new(
             generated_name(),
@@ -129,8 +125,7 @@ pub async fn update_failed() -> StackFailure {
     failure
 }
 
-pub async fn update_rollback_failed() -> StackFailure {
-    let client = get_client().await;
+pub async fn update_rollback_failed(client: &Client) -> StackFailure {
     let output = client
         .apply_stack(
             ApplyStackInput::new(generated_name(), TemplateSource::inline(NON_EMPTY_TEMPLATE))

@@ -1,6 +1,8 @@
 //! Types and values representing various CloudFormation statuses.
 #![allow(clippy::module_name_repetitions)]
 
+use std::convert::TryFrom;
+
 /// Common operations for statuses.
 pub trait Status: std::fmt::Debug + std::fmt::Display + private::Sealed {
     /// Indicates whether or not a status is settled.
@@ -166,6 +168,52 @@ impl Status for StackStatus {
             | Self::ImportRollbackInProgress
             | Self::ImportRollbackFailed
             | Self::ImportRollbackComplete => StatusSentiment::Negative,
+        }
+    }
+}
+
+/// Settled statuses in which a stack cannot be updated.
+///
+/// In some cases these may be recoverable, in others they may be terminal (i.e. the only option is
+/// to delete the stack).
+#[derive(Clone, Copy, Debug, Eq, PartialEq, parse_display::Display, parse_display::FromStr)]
+#[display(style = "SNAKE_CASE")]
+pub enum BlockedStackStatus {
+    CreateFailed,
+    RollbackFailed,
+    DeleteFailed,
+    UpdateFailed,
+    UpdateRollbackFailed,
+}
+
+impl TryFrom<StackStatus> for BlockedStackStatus {
+    type Error = StackStatus;
+
+    fn try_from(status: StackStatus) -> Result<Self, Self::Error> {
+        match status {
+            StackStatus::CreateFailed => Ok(Self::CreateFailed),
+            StackStatus::RollbackFailed => Ok(Self::RollbackFailed),
+            StackStatus::DeleteFailed => Ok(Self::DeleteFailed),
+            StackStatus::UpdateFailed => Ok(Self::UpdateFailed),
+            StackStatus::UpdateRollbackFailed => Ok(Self::UpdateRollbackFailed),
+            StackStatus::CreateInProgress
+            | StackStatus::CreateComplete
+            | StackStatus::DeleteComplete
+            | StackStatus::DeleteInProgress
+            | StackStatus::ReviewInProgress
+            | StackStatus::RollbackInProgress
+            | StackStatus::RollbackComplete
+            | StackStatus::UpdateInProgress
+            | StackStatus::UpdateCompleteCleanupInProgress
+            | StackStatus::UpdateComplete
+            | StackStatus::UpdateRollbackInProgress
+            | StackStatus::UpdateRollbackCompleteCleanupInProgress
+            | StackStatus::UpdateRollbackComplete
+            | StackStatus::ImportInProgress
+            | StackStatus::ImportComplete
+            | StackStatus::ImportRollbackInProgress
+            | StackStatus::ImportRollbackFailed
+            | StackStatus::ImportRollbackComplete => Err(status),
         }
     }
 }
