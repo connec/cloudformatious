@@ -1,10 +1,10 @@
 //! Helpers for working with change sets.
 
-use std::{fmt, time::Duration};
+use std::{convert::TryFrom, fmt, time::Duration};
 
 use aws_sdk_cloudformation::{
     client::fluent_builders::CreateChangeSet,
-    error::{DescribeChangeSetError, ExecuteChangeSetError},
+    error::DescribeChangeSetError,
     model::{Change, ChangeAction},
     output::DescribeChangeSetOutput,
     types::SdkError,
@@ -13,11 +13,12 @@ use aws_smithy_types_convert::date_time::DateTimeExt;
 use chrono::{DateTime, Utc};
 use enumset::EnumSet;
 use futures_util::TryFutureExt;
+use regex::Regex;
 use tokio::time::{interval_at, Instant};
 
 use crate::{
     stack::{StackOperation, StackOperationStatus},
-    Capability, ChangeSetStatus, StackStatus, Tag,
+    BlockedStackStatus, Capability, ChangeSetStatus, StackStatus, Tag,
 };
 
 const POLL_INTERVAL_CHANGE_SET: Duration = Duration::from_secs(1);
@@ -713,13 +714,18 @@ pub(crate) struct ChangeSetWithType {
 pub(crate) enum CreateChangeSetError {
     CreateApi(SdkError<aws_sdk_cloudformation::error::CreateChangeSetError>),
     PollApi(SdkError<DescribeChangeSetError>),
+    Blocked { status: BlockedStackStatus },
     NoChanges(ChangeSetWithType),
     Failed(ChangeSetWithType),
 }
 
 impl From<SdkError<aws_sdk_cloudformation::error::CreateChangeSetError>> for CreateChangeSetError {
     fn from(error: SdkError<aws_sdk_cloudformation::error::CreateChangeSetError>) -> Self {
-        Self::CreateApi(error)
+        if let Some(status) = is_create_blocked(&error) {
+            Self::Blocked { status }
+        } else {
+            Self::CreateApi(error)
+        }
     }
 }
 
@@ -800,6 +806,19 @@ pub(crate) async fn create_change_set(
     }
 }
 
+pub(crate) enum ExecuteChangeSetError {
+    ExecuteApi(SdkError<aws_sdk_cloudformation::error::ExecuteChangeSetError>),
+    Blocked { status: BlockedStackStatus },
+}
+
+impl From<SdkError<aws_sdk_cloudformation::error::ExecuteChangeSetError>>
+    for ExecuteChangeSetError
+{
+    fn from(error: SdkError<aws_sdk_cloudformation::error::ExecuteChangeSetError>) -> Self {
+        Self::ExecuteApi(error)
+    }
+}
+
 pub(crate) async fn execute_change_set(
     client: &aws_sdk_cloudformation::Client,
     stack_id: String,
@@ -808,7 +827,7 @@ pub(crate) async fn execute_change_set(
     disable_rollback: bool,
 ) -> Result<
     StackOperation<'_, impl Fn(StackStatus) -> StackOperationStatus + Unpin>,
-    SdkError<ExecuteChangeSetError>,
+    ExecuteChangeSetError,
 > {
     let started_at = Utc::now();
     client
@@ -816,7 +835,13 @@ pub(crate) async fn execute_change_set(
         .set_disable_rollback(Some(disable_rollback))
         .change_set_name(change_set_id)
         .send()
-        .await?;
+        .await
+        .map_err(|error| {
+            if let Some(status) = is_execute_blocked(&error) {
+                return ExecuteChangeSetError::Blocked { status };
+            }
+            ExecuteChangeSetError::ExecuteApi(error)
+        })?;
 
     Ok(StackOperation::new(
         client,
@@ -833,6 +858,49 @@ fn is_already_exists(
     error: &SdkError<aws_sdk_cloudformation::error::CreateChangeSetError>,
 ) -> bool {
     error.to_string().contains(" already exists ")
+}
+
+fn is_create_blocked(
+    error: &SdkError<aws_sdk_cloudformation::error::CreateChangeSetError>,
+) -> Option<BlockedStackStatus> {
+    lazy_static::lazy_static! {
+        static ref BLOCKED: regex::Regex = regex::Regex::new(r"(?i)^Stack:[^ ]* is in (?P<status>[_A-Z]+) state and can not be updated").unwrap();
+    }
+
+    let SdkError::ServiceError { err, .. } = error else {
+        return None;
+    };
+
+    is_blocked(&BLOCKED, err.message().unwrap())
+}
+
+fn is_execute_blocked(
+    error: &SdkError<aws_sdk_cloudformation::error::ExecuteChangeSetError>,
+) -> Option<BlockedStackStatus> {
+    lazy_static::lazy_static! {
+        static ref BLOCKED: regex::Regex = regex::Regex::new(r"(?i)^This stack is currently in a non-terminal \[(?P<status>[_A-Z]+)\] state").unwrap();
+    }
+
+    let SdkError::ServiceError { err, .. } = error else {
+        return None;
+    };
+
+    is_blocked(&BLOCKED, err.message().unwrap())
+}
+
+fn is_blocked(pattern: &Regex, message: &str) -> Option<BlockedStackStatus> {
+    let Some(detail) = pattern.captures(message) else {
+        return None;
+    };
+
+    let status: StackStatus = detail
+        .name("status")
+        .unwrap()
+        .as_str()
+        .parse()
+        .expect("captured invalid status");
+    let status = BlockedStackStatus::try_from(status).expect("captured non-blocked status");
+    Some(status)
 }
 
 fn is_no_changes(status_reason: Option<&str>) -> bool {

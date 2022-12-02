@@ -13,10 +13,10 @@ use futures_util::{Stream, TryFutureExt, TryStreamExt};
 use crate::{
     change_set::{
         create_change_set, execute_change_set, ChangeSet, ChangeSetType, ChangeSetWithType,
-        CreateChangeSetError,
+        CreateChangeSetError, ExecuteChangeSetError,
     },
     stack::StackOperationError,
-    ChangeSetStatus, StackEvent, StackFailure, StackStatus, StackWarning, Tag,
+    BlockedStackStatus, ChangeSetStatus, StackEvent, StackFailure, StackStatus, StackWarning, Tag,
 };
 
 /// The input for the `apply_stack` operation.
@@ -532,6 +532,12 @@ pub enum ApplyStackError {
     /// you do need to programmatically match a particular API error you can use [`Box::downcast`].
     CloudFormationApi(Box<dyn std::error::Error>),
 
+    /// The stack cannot be modified as it's in a blocked state.
+    Blocked {
+        /// The blocked status that the stack is in.
+        status: BlockedStackStatus,
+    },
+
     /// The change set failed to create.
     ///
     /// Change sets are created asynchronously and may settle in a `FAILED` state. Trying to execute
@@ -599,6 +605,13 @@ impl fmt::Display for ApplyStackError {
             Self::CloudFormationApi(error) => {
                 write!(f, "CloudFormation API error: {}", error)
             }
+            Self::Blocked { status } => {
+                write!(
+                    f,
+                    "stack operation failed because the stack is in a blocked state: {}",
+                    status
+                )
+            }
             Self::CreateChangeSetFailed {
                 id,
                 status,
@@ -620,9 +633,10 @@ impl std::error::Error for ApplyStackError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::CloudFormationApi(error) => Some(error.as_ref()),
-            Self::CreateChangeSetFailed { .. } | Self::Failure { .. } | Self::Warning { .. } => {
-                None
-            }
+            Self::Blocked { .. }
+            | Self::CreateChangeSetFailed { .. }
+            | Self::Failure { .. }
+            | Self::Warning { .. } => None,
         }
     }
 }
@@ -675,7 +689,10 @@ impl<'client> ApplyStack<'client> {
             let mut operation =
                 execute_change_set(client, stack_id.clone(), change_set_id, change_set_type, disable_rollback)
                     .await
-                    .map_err(ApplyStackError::from_sdk_error)?;
+                    .map_err(|error| match error {
+                        ExecuteChangeSetError::ExecuteApi(error) => ApplyStackError::from_sdk_error(error),
+                        ExecuteChangeSetError::Blocked { status } => ApplyStackError::Blocked { status },
+                    })?;
             while let Some(event) = operation
                 .try_next()
                 .await
@@ -843,6 +860,7 @@ async fn create_change_set_internal(
         CreateChangeSetError::NoChanges(change_set) => Ok(Err(change_set)),
         CreateChangeSetError::CreateApi(error) => Err(ApplyStackError::from_sdk_error(error)),
         CreateChangeSetError::PollApi(error) => Err(ApplyStackError::from_sdk_error(error)),
+        CreateChangeSetError::Blocked { status } => Err(ApplyStackError::Blocked { status }),
         CreateChangeSetError::Failed(ChangeSetWithType { change_set, .. }) => {
             Err(ApplyStackError::CreateChangeSetFailed {
                 id: change_set.change_set_id,
