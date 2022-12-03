@@ -27,6 +27,27 @@ async fn create_failed() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[tokio::test]
+async fn rollback_complete() -> Result<(), Box<dyn std::error::Error>> {
+    let client = get_client().await;
+    let failure = stack_with_status::rollback_complete(&client).await;
+
+    let status = BlockedStackStatus::try_from(failure.stack_status).unwrap();
+    assert_eq!(status, BlockedStackStatus::RollbackComplete);
+
+    let error = try_update(&client, &failure.stack_id).await;
+    assert_matches!(
+        error,
+        ApplyStackError::Blocked {
+            status: BlockedStackStatus::RollbackComplete,
+        }
+    );
+
+    clean_up(failure.stack_id).await?;
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn rollback_failed() -> Result<(), Box<dyn std::error::Error>> {
     let client = get_client().await;
     let failure = stack_with_status::rollback_failed(&client).await;

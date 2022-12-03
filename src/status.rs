@@ -180,6 +180,7 @@ impl Status for StackStatus {
 #[display(style = "SNAKE_CASE")]
 pub enum BlockedStackStatus {
     CreateFailed,
+    RollbackComplete,
     RollbackFailed,
     DeleteFailed,
     UpdateFailed,
@@ -192,6 +193,7 @@ impl TryFrom<StackStatus> for BlockedStackStatus {
     fn try_from(status: StackStatus) -> Result<Self, Self::Error> {
         match status {
             StackStatus::CreateFailed => Ok(Self::CreateFailed),
+            StackStatus::RollbackComplete => Ok(Self::RollbackComplete),
             StackStatus::RollbackFailed => Ok(Self::RollbackFailed),
             StackStatus::DeleteFailed => Ok(Self::DeleteFailed),
             StackStatus::UpdateFailed => Ok(Self::UpdateFailed),
@@ -202,7 +204,6 @@ impl TryFrom<StackStatus> for BlockedStackStatus {
             | StackStatus::DeleteInProgress
             | StackStatus::ReviewInProgress
             | StackStatus::RollbackInProgress
-            | StackStatus::RollbackComplete
             | StackStatus::UpdateInProgress
             | StackStatus::UpdateCompleteCleanupInProgress
             | StackStatus::UpdateComplete

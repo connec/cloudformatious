@@ -59,6 +59,19 @@ pub async fn create_failed(client: &Client) -> StackFailure {
     failure
 }
 
+pub async fn rollback_complete(client: &Client) -> StackFailure {
+    let error = client
+        .apply_stack(ApplyStackInput::new(
+            generated_name(),
+            TemplateSource::inline(FAILING_TEMPLATE),
+        ))
+        .await
+        .unwrap_err();
+    let failure = assert_matches!(error, ApplyStackError::Failure(failure) => failure);
+    assert_eq!(failure.stack_status, StackStatus::RollbackComplete);
+    failure
+}
+
 pub async fn rollback_failed(client: &Client) -> StackFailure {
     let error = client
         .apply_stack(
