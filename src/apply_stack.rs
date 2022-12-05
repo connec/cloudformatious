@@ -456,9 +456,9 @@ pub struct ApplyStackOutput {
 }
 
 impl ApplyStackOutput {
-    fn from_raw(stack: Stack) -> Self {
+    fn from_raw(stack: Stack, change_set_id: String) -> Self {
         Self {
-            change_set_id: stack.change_set_id.expect("Stack without change_set_id"),
+            change_set_id,
             creation_time: stack
                 .creation_time
                 .expect("Stack without creation_time")
@@ -678,16 +678,17 @@ impl<'client> ApplyStack<'client> {
                     }
                     Err(ChangeSetWithType { change_set, .. }) => {
                         let stack_id = change_set.stack_id.clone();
+                        let change_set_id = change_set.change_set_id.clone();
                         yield ApplyStackEvent::ChangeSet(change_set);
 
-                        let output = describe_output(client, stack_id).await?;
+                        let output = describe_output(client, stack_id, change_set_id).await?;
                         yield ApplyStackEvent::Output(output);
                         return;
                     }
                 };
 
             let mut operation =
-                execute_change_set(client, stack_id.clone(), change_set_id, change_set_type, disable_rollback)
+                execute_change_set(client, stack_id.clone(), change_set_id.clone(), change_set_type, disable_rollback)
                     .await
                     .map_err(|error| match error {
                         ExecuteChangeSetError::ExecuteApi(error) => ApplyStackError::from_sdk_error(error),
@@ -710,7 +711,7 @@ impl<'client> ApplyStack<'client> {
                 Err(StackOperationError::Warning(warning)) => Some(warning),
             };
 
-            let output = describe_output(client, stack_id).await?;
+            let output = describe_output(client, stack_id, change_set_id).await?;
 
             match warning {
                 Some(warning) => {
@@ -876,6 +877,7 @@ async fn create_change_set_internal(
 async fn describe_output(
     client: &aws_sdk_cloudformation::Client,
     stack_id: String,
+    change_set_id: String,
 ) -> Result<ApplyStackOutput, ApplyStackError> {
     let stack = client
         .describe_stacks()
@@ -887,7 +889,7 @@ async fn describe_output(
         .expect("DescribeStacksOutput without stacks")
         .pop()
         .expect("DescribeStacksOutput empty stacks");
-    Ok(ApplyStackOutput::from_raw(stack))
+    Ok(ApplyStackOutput::from_raw(stack, change_set_id))
 }
 
 #[cfg(test)]

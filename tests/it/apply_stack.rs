@@ -7,7 +7,8 @@ use cloudformatious::{
 };
 
 use crate::common::{
-    clean_up, generated_name, get_client, EMPTY_TEMPLATE, EMPTY_TEMPLATE_WITH_TRANSFORM,
+    clean_up, generated_name, get_client, stack_with_status, EMPTY_TEMPLATE,
+    EMPTY_TEMPLATE_WITH_TRANSFORM,
 };
 
 const FAILING_TEMPLATE: &str = r#"
@@ -233,7 +234,9 @@ async fn apply_overall_idempotent() -> Result<(), Box<dyn std::error::Error>> {
     let output2 = apply.await?;
 
     assert_eq!(output2.stack_status, StackStatus::CreateComplete);
-    assert_eq!(output1, output2);
+    assert_eq!(output1.stack_status, output2.stack_status);
+    assert_eq!(output1.creation_time, output2.creation_time);
+    assert_eq!(output1.last_updated_time, output2.last_updated_time);
 
     clean_up(stack_name).await?;
 
@@ -266,7 +269,9 @@ async fn apply_overall_idempotent_with_transform() -> Result<(), Box<dyn std::er
     let output2 = apply.await?;
 
     assert_eq!(output2.stack_status, StackStatus::CreateComplete);
-    assert_eq!(output1, output2);
+    assert_eq!(output1.stack_status, output2.stack_status);
+    assert_eq!(output1.creation_time, output2.creation_time);
+    assert_eq!(output1.last_updated_time, output2.last_updated_time);
 
     clean_up(stack_name).await?;
 
@@ -513,6 +518,25 @@ async fn update_stack_fut_err_disable_rollback() -> Result<(), Box<dyn std::erro
     }
 
     clean_up(stack_name).await?;
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn apply_to_update_rollback_complete_idempotent() -> Result<(), Box<dyn std::error::Error>> {
+    let client = get_client().await;
+
+    let failure = stack_with_status::update_rollback_complete(&client).await;
+
+    let output = client
+        .apply_stack(ApplyStackInput::new(
+            &failure.stack_id,
+            TemplateSource::inline(EMPTY_TEMPLATE),
+        ))
+        .await?;
+    assert_eq!(output.stack_status, StackStatus::UpdateRollbackComplete);
+
+    clean_up(failure.stack_id).await?;
 
     Ok(())
 }
