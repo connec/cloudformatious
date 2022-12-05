@@ -138,6 +138,28 @@ pub async fn update_failed(client: &Client) -> StackFailure {
     failure
 }
 
+pub async fn update_rollback_complete(client: &Client) -> StackFailure {
+    let output = client
+        .apply_stack(ApplyStackInput::new(
+            generated_name(),
+            TemplateSource::inline(EMPTY_TEMPLATE),
+        ))
+        .await
+        .unwrap();
+
+    let error = client
+        .apply_stack(ApplyStackInput::new(
+            output.stack_id,
+            TemplateSource::inline(FAILING_TEMPLATE),
+        ))
+        .await
+        .unwrap_err();
+
+    let failure = assert_matches!(error, ApplyStackError::Failure(failure) => failure);
+    assert_eq!(failure.stack_status, StackStatus::UpdateRollbackComplete);
+    failure
+}
+
 pub async fn update_rollback_failed(client: &Client) -> StackFailure {
     let output = client
         .apply_stack(
