@@ -163,10 +163,10 @@ impl fmt::Display for DeleteStackError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::CloudFormationApi(error) => {
-                write!(f, "CloudFormation API error: {}", error)
+                write!(f, "CloudFormation API error: {error}")
             }
-            Self::Failure(failure) => write!(f, "{}", failure),
-            Self::Warning(warning) => write!(f, "{}", warning),
+            Self::Failure(failure) => write!(f, "{failure}"),
+            Self::Warning(warning) => write!(f, "{warning}"),
         }
     }
 }
@@ -195,9 +195,8 @@ impl<'client> DeleteStack<'client> {
         input: DeleteStackInput,
     ) -> Self {
         let event_stream = try_stream! {
-            let stack_id = match describe_stack_id(client, input.stack_name.clone()).await? {
-                Some(stack_id) => stack_id,
-                None => return,
+            let Some(stack_id) = (describe_stack_id(client, input.stack_name.clone()).await?) else {
+                return;
             };
 
             let started_at = Utc::now();

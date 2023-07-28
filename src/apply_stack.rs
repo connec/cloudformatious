@@ -603,13 +603,12 @@ impl fmt::Display for ApplyStackError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::CloudFormationApi(error) => {
-                write!(f, "CloudFormation API error: {}", error)
+                write!(f, "CloudFormation API error: {error}")
             }
             Self::Blocked { status } => {
                 write!(
                     f,
-                    "stack operation failed because the stack is in a blocked state: {}",
-                    status
+                    "stack operation failed because the stack is in a blocked state: {status}",
                 )
             }
             Self::CreateChangeSetFailed {
@@ -619,12 +618,11 @@ impl fmt::Display for ApplyStackError {
             } => {
                 write!(
                     f,
-                    "Change set {} failed to create; terminal status: {} ({})",
-                    id, status, status_reason
+                    "Change set {id} failed to create; terminal status: {status} ({status_reason})",
                 )
             }
-            Self::Failure(failure) => write!(f, "{}", failure),
-            Self::Warning { warning, .. } => write!(f, "{}", warning),
+            Self::Failure(failure) => write!(f, "{failure}"),
+            Self::Warning { warning, .. } => write!(f, "{warning}"),
         }
     }
 }

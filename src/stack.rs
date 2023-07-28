@@ -184,7 +184,7 @@ where
                     .collect();
 
                 if let Some(stack_event) = stack_events.first() {
-                    since = stack_event.timestamp().clone();
+                    since = *stack_event.timestamp();
                 }
 
                 for stack_event in stack_events.into_iter().rev() {
