@@ -3,11 +3,10 @@
 use std::{convert::TryFrom, fmt, time::Duration};
 
 use aws_sdk_cloudformation::{
-    client::fluent_builders::CreateChangeSet,
-    error::DescribeChangeSetError,
-    model::{Change, ChangeAction},
-    output::DescribeChangeSetOutput,
-    types::SdkError,
+    error::{ProvideErrorMetadata, SdkError},
+    operation::create_change_set::builders::CreateChangeSetFluentBuilder,
+    operation::describe_change_set::{DescribeChangeSetError, DescribeChangeSetOutput},
+    types::{Change, ChangeAction},
 };
 use aws_smithy_types_convert::date_time::DateTimeExt;
 use chrono::{DateTime, Utc};
@@ -30,10 +29,10 @@ pub(crate) enum ChangeSetType {
 }
 
 impl ChangeSetType {
-    pub(crate) fn into_sdk(self) -> aws_sdk_cloudformation::model::ChangeSetType {
+    pub(crate) fn into_sdk(self) -> aws_sdk_cloudformation::types::ChangeSetType {
         match self {
-            ChangeSetType::Create => aws_sdk_cloudformation::model::ChangeSetType::Create,
-            ChangeSetType::Update => aws_sdk_cloudformation::model::ChangeSetType::Update,
+            ChangeSetType::Create => aws_sdk_cloudformation::types::ChangeSetType::Create,
+            ChangeSetType::Update => aws_sdk_cloudformation::types::ChangeSetType::Update,
         }
     }
 }
@@ -140,7 +139,8 @@ impl ChangeSet {
             creation_time: change_set
                 .creation_time
                 .expect("DescribeChangeSetOutput without creation_time")
-                .to_chrono_utc(),
+                .to_chrono_utc()
+                .expect("invalid creation_time"),
             description: change_set.description,
             execution_status: change_set
                 .execution_status
@@ -225,7 +225,7 @@ pub struct Parameter {
 }
 
 impl Parameter {
-    fn from_sdk(param: aws_sdk_cloudformation::model::Parameter) -> Self {
+    fn from_sdk(param: aws_sdk_cloudformation::types::Parameter) -> Self {
         Self {
             parameter_key: param
                 .parameter_key
@@ -261,7 +261,7 @@ impl ResourceChange {
         assert!(
             matches!(
                 change.r#type,
-                Some(aws_sdk_cloudformation::model::ChangeType::Resource)
+                Some(aws_sdk_cloudformation::types::ChangeType::Resource)
             ),
             "Change with unexpected type {:?}",
             change.r#type
@@ -312,9 +312,9 @@ impl Action {
     fn from_sdk(
         resource_type: &str,
         action: &ChangeAction,
-        details: Option<Vec<aws_sdk_cloudformation::model::ResourceChangeDetail>>,
-        replacement: Option<aws_sdk_cloudformation::model::Replacement>,
-        scope: Option<Vec<aws_sdk_cloudformation::model::ResourceAttribute>>,
+        details: Option<Vec<aws_sdk_cloudformation::types::ResourceChangeDetail>>,
+        replacement: Option<aws_sdk_cloudformation::types::Replacement>,
+        scope: Option<Vec<aws_sdk_cloudformation::types::ResourceAttribute>>,
     ) -> Self {
         match action {
             ChangeAction::Add
@@ -373,9 +373,9 @@ pub struct ModifyDetail {
 impl ModifyDetail {
     fn from_sdk(
         resource_type: &str,
-        details: Vec<aws_sdk_cloudformation::model::ResourceChangeDetail>,
-        replacement: &aws_sdk_cloudformation::model::Replacement,
-        scope: Vec<aws_sdk_cloudformation::model::ResourceAttribute>,
+        details: Vec<aws_sdk_cloudformation::types::ResourceChangeDetail>,
+        replacement: &aws_sdk_cloudformation::types::Replacement,
+        scope: Vec<aws_sdk_cloudformation::types::ResourceAttribute>,
     ) -> Self {
         Self {
             details: details
@@ -485,7 +485,7 @@ pub struct ResourceChangeDetail {
 impl ResourceChangeDetail {
     fn from_sdk(
         resource_type: &str,
-        details: aws_sdk_cloudformation::model::ResourceChangeDetail,
+        details: aws_sdk_cloudformation::types::ResourceChangeDetail,
     ) -> Self {
         let causing_entity = details.causing_entity;
         Self {
@@ -545,13 +545,13 @@ pub enum ChangeSource {
 
 impl ChangeSource {
     fn from_sdk(
-        change_source: &aws_sdk_cloudformation::model::ChangeSource,
+        change_source: &aws_sdk_cloudformation::types::ChangeSource,
         causing_entity: Option<String>,
     ) -> Self {
         match change_source {
-            aws_sdk_cloudformation::model::ChangeSource::ResourceReference
-            | aws_sdk_cloudformation::model::ChangeSource::ParameterReference
-            | aws_sdk_cloudformation::model::ChangeSource::ResourceAttribute => {
+            aws_sdk_cloudformation::types::ChangeSource::ResourceReference
+            | aws_sdk_cloudformation::types::ChangeSource::ParameterReference
+            | aws_sdk_cloudformation::types::ChangeSource::ResourceAttribute => {
                 let causing_entity = causing_entity.unwrap_or_else(|| {
                     panic!(
                         "ResourceChangeDetail with change_source {:?} without causing_entity",
@@ -559,22 +559,22 @@ impl ChangeSource {
                     )
                 });
                 match change_source {
-                    aws_sdk_cloudformation::model::ChangeSource::ResourceReference => {
+                    aws_sdk_cloudformation::types::ChangeSource::ResourceReference => {
                         Self::ResourceReference(causing_entity)
                     }
-                    aws_sdk_cloudformation::model::ChangeSource::ParameterReference => {
+                    aws_sdk_cloudformation::types::ChangeSource::ParameterReference => {
                         Self::ParameterReference(causing_entity)
                     }
-                    aws_sdk_cloudformation::model::ChangeSource::ResourceAttribute => {
+                    aws_sdk_cloudformation::types::ChangeSource::ResourceAttribute => {
                         Self::ResourceAttribute(causing_entity)
                     }
                     _ => unreachable!(),
                 }
             }
-            aws_sdk_cloudformation::model::ChangeSource::DirectModification => {
+            aws_sdk_cloudformation::types::ChangeSource::DirectModification => {
                 Self::DirectModification
             }
-            aws_sdk_cloudformation::model::ChangeSource::Automatic => Self::Automatic,
+            aws_sdk_cloudformation::types::ChangeSource::Automatic => Self::Automatic,
             _ => panic!(
                 "ResourceChangeDetail with invalid change_source {:?}",
                 change_source
@@ -634,13 +634,13 @@ pub enum ResourceTargetDefinition {
 impl ResourceTargetDefinition {
     fn from_sdk(
         resource_type: &str,
-        target: aws_sdk_cloudformation::model::ResourceTargetDefinition,
+        target: aws_sdk_cloudformation::types::ResourceTargetDefinition,
     ) -> Self {
         let attribute = target
             .attribute
             .expect("ResourceTargetDefinition without attribute");
         match attribute {
-            aws_sdk_cloudformation::model::ResourceAttribute::Properties => Self::Properties {
+            aws_sdk_cloudformation::types::ResourceAttribute::Properties => Self::Properties {
                 name: target
                     .name
                     .expect("ResourceTargetDefinition with attribute \"Properties\" without name"),
@@ -654,11 +654,11 @@ impl ResourceTargetDefinition {
                     .parse()
                     .expect("ResourceTargetDefinition with invalid requires_recreation"),
             },
-            aws_sdk_cloudformation::model::ResourceAttribute::Metadata
-            | aws_sdk_cloudformation::model::ResourceAttribute::CreationPolicy
-            | aws_sdk_cloudformation::model::ResourceAttribute::UpdatePolicy
-            | aws_sdk_cloudformation::model::ResourceAttribute::DeletionPolicy
-            | aws_sdk_cloudformation::model::ResourceAttribute::Tags => {
+            aws_sdk_cloudformation::types::ResourceAttribute::Metadata
+            | aws_sdk_cloudformation::types::ResourceAttribute::CreationPolicy
+            | aws_sdk_cloudformation::types::ResourceAttribute::UpdatePolicy
+            | aws_sdk_cloudformation::types::ResourceAttribute::DeletionPolicy
+            | aws_sdk_cloudformation::types::ResourceAttribute::Tags => {
                 assert!(
                     target.name.is_none(),
                     "ResourceTargetDefinition with attribute {:?} with name",
@@ -671,7 +671,7 @@ impl ResourceTargetDefinition {
                     // CloudFormation and ignore it.
                     matches!(
                         target.requires_recreation,
-                        None | Some(aws_sdk_cloudformation::model::RequiresRecreation::Never)
+                        None | Some(aws_sdk_cloudformation::types::RequiresRecreation::Never)
                     ) || resource_type == "AWS::SecretsManager::Secret",
                     "ResourceTargetDefinition with attribute {:?} with requires_recreation",
                     attribute
@@ -712,15 +712,19 @@ pub(crate) struct ChangeSetWithType {
 }
 
 pub(crate) enum CreateChangeSetError {
-    CreateApi(SdkError<aws_sdk_cloudformation::error::CreateChangeSetError>),
+    CreateApi(SdkError<aws_sdk_cloudformation::operation::create_change_set::CreateChangeSetError>),
     PollApi(SdkError<DescribeChangeSetError>),
     Blocked { status: BlockedStackStatus },
     NoChanges(ChangeSetWithType),
     Failed(ChangeSetWithType),
 }
 
-impl From<SdkError<aws_sdk_cloudformation::error::CreateChangeSetError>> for CreateChangeSetError {
-    fn from(error: SdkError<aws_sdk_cloudformation::error::CreateChangeSetError>) -> Self {
+impl From<SdkError<aws_sdk_cloudformation::operation::create_change_set::CreateChangeSetError>>
+    for CreateChangeSetError
+{
+    fn from(
+        error: SdkError<aws_sdk_cloudformation::operation::create_change_set::CreateChangeSetError>,
+    ) -> Self {
         if let Some(status) = is_create_blocked(&error) {
             Self::Blocked { status }
         } else {
@@ -738,7 +742,7 @@ impl From<SdkError<DescribeChangeSetError>> for CreateChangeSetError {
 pub(crate) async fn create_change_set(
     client: &aws_sdk_cloudformation::Client,
     mut change_set_type: ChangeSetType,
-    input: CreateChangeSet,
+    input: CreateChangeSetFluentBuilder,
 ) -> Result<ChangeSetWithType, CreateChangeSetError> {
     let change_set = input
         .clone()
@@ -807,14 +811,22 @@ pub(crate) async fn create_change_set(
 }
 
 pub(crate) enum ExecuteChangeSetError {
-    ExecuteApi(SdkError<aws_sdk_cloudformation::error::ExecuteChangeSetError>),
-    Blocked { status: BlockedStackStatus },
+    ExecuteApi(
+        SdkError<aws_sdk_cloudformation::operation::execute_change_set::ExecuteChangeSetError>,
+    ),
+    Blocked {
+        status: BlockedStackStatus,
+    },
 }
 
-impl From<SdkError<aws_sdk_cloudformation::error::ExecuteChangeSetError>>
+impl From<SdkError<aws_sdk_cloudformation::operation::execute_change_set::ExecuteChangeSetError>>
     for ExecuteChangeSetError
 {
-    fn from(error: SdkError<aws_sdk_cloudformation::error::ExecuteChangeSetError>) -> Self {
+    fn from(
+        error: SdkError<
+            aws_sdk_cloudformation::operation::execute_change_set::ExecuteChangeSetError,
+        >,
+    ) -> Self {
         Self::ExecuteApi(error)
     }
 }
@@ -855,37 +867,31 @@ pub(crate) async fn execute_change_set(
 }
 
 fn is_already_exists(
-    error: &SdkError<aws_sdk_cloudformation::error::CreateChangeSetError>,
+    error: &SdkError<aws_sdk_cloudformation::operation::create_change_set::CreateChangeSetError>,
 ) -> bool {
-    error.to_string().contains(" already exists ")
+    error
+        .message()
+        .is_some_and(|msg| msg.contains(" already exists "))
 }
 
 fn is_create_blocked(
-    error: &SdkError<aws_sdk_cloudformation::error::CreateChangeSetError>,
+    error: &SdkError<aws_sdk_cloudformation::operation::create_change_set::CreateChangeSetError>,
 ) -> Option<BlockedStackStatus> {
     lazy_static::lazy_static! {
         static ref BLOCKED: regex::Regex = regex::Regex::new(r"(?i)^Stack:[^ ]* is in (?P<status>[_A-Z]+) state and can not be updated").unwrap();
     }
 
-    let SdkError::ServiceError { err, .. } = error else {
-        return None;
-    };
-
-    is_blocked(&BLOCKED, err.message().unwrap())
+    is_blocked(&BLOCKED, error.message().unwrap())
 }
 
 fn is_execute_blocked(
-    error: &SdkError<aws_sdk_cloudformation::error::ExecuteChangeSetError>,
+    error: &SdkError<aws_sdk_cloudformation::operation::execute_change_set::ExecuteChangeSetError>,
 ) -> Option<BlockedStackStatus> {
     lazy_static::lazy_static! {
         static ref BLOCKED: regex::Regex = regex::Regex::new(r"(?i)^This stack is currently in a non-terminal \[(?P<status>[_A-Z]+)\] state").unwrap();
     }
 
-    let SdkError::ServiceError { err, .. } = error else {
-        return None;
-    };
-
-    is_blocked(&BLOCKED, err.message().unwrap())
+    is_blocked(&BLOCKED, error.message().unwrap())
 }
 
 fn is_blocked(pattern: &Regex, message: &str) -> Option<BlockedStackStatus> {

@@ -4,7 +4,8 @@ use std::{fmt, future::Future, pin::Pin, task};
 
 use async_stream::try_stream;
 use aws_sdk_cloudformation::{
-    client::fluent_builders::CreateChangeSet, model::Stack, types::SdkError,
+    error::SdkError, operation::create_change_set::builders::CreateChangeSetFluentBuilder,
+    types::Stack,
 };
 use aws_smithy_types_convert::date_time::DateTimeExt;
 use chrono::{DateTime, Utc};
@@ -241,7 +242,10 @@ impl ApplyStackInput {
         self
     }
 
-    fn configure(self, op: CreateChangeSet) -> (ChangeSetType, CreateChangeSet) {
+    fn configure(
+        self,
+        op: CreateChangeSetFluentBuilder,
+    ) -> (ChangeSetType, CreateChangeSetFluentBuilder) {
         let change_set_type = ChangeSetType::Create;
         let (template_body, template_url) = match self.template_source {
             TemplateSource::Inline { body } => (Some(body), None),
@@ -348,11 +352,11 @@ pub enum Capability {
 }
 
 impl Capability {
-    fn into_sdk(self) -> aws_sdk_cloudformation::model::Capability {
+    fn into_sdk(self) -> aws_sdk_cloudformation::types::Capability {
         match self {
-            Self::Iam => aws_sdk_cloudformation::model::Capability::CapabilityIam,
-            Self::NamedIam => aws_sdk_cloudformation::model::Capability::CapabilityNamedIam,
-            Self::AutoExpand => aws_sdk_cloudformation::model::Capability::CapabilityAutoExpand,
+            Self::Iam => aws_sdk_cloudformation::types::Capability::CapabilityIam,
+            Self::NamedIam => aws_sdk_cloudformation::types::Capability::CapabilityNamedIam,
+            Self::AutoExpand => aws_sdk_cloudformation::types::Capability::CapabilityAutoExpand,
         }
     }
 }
@@ -371,8 +375,8 @@ pub struct Parameter {
 }
 
 impl Parameter {
-    fn into_sdk(self) -> aws_sdk_cloudformation::model::Parameter {
-        aws_sdk_cloudformation::model::Parameter::builder()
+    fn into_sdk(self) -> aws_sdk_cloudformation::types::Parameter {
+        aws_sdk_cloudformation::types::Parameter::builder()
             .parameter_key(self.key)
             .parameter_value(self.value)
             .build()
@@ -462,12 +466,15 @@ impl ApplyStackOutput {
             creation_time: stack
                 .creation_time
                 .expect("Stack without creation_time")
-                .to_chrono_utc(),
+                .to_chrono_utc()
+                .expect("invalid creation_time"),
             description: stack.description,
             last_updated_time: stack
                 .last_updated_time
                 .as_ref()
-                .map(DateTimeExt::to_chrono_utc),
+                .map(DateTimeExt::to_chrono_utc)
+                .transpose()
+                .expect("invalid last_updated_time"),
             outputs: stack
                 .outputs
                 .map(|outputs| {

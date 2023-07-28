@@ -1,7 +1,9 @@
 use std::{fmt, pin::Pin, task, time::Duration};
 
 use async_stream::try_stream;
-use aws_sdk_cloudformation::{error::DescribeStackEventsError, types::SdkError};
+use aws_sdk_cloudformation::{
+    error::SdkError, operation::describe_stack_events::DescribeStackEventsError,
+};
 use aws_smithy_types_convert::date_time::DateTimeExt;
 use chrono::{DateTime, Utc};
 use futures_util::Stream;
@@ -178,6 +180,7 @@ where
                             .timestamp
                             .expect("StackEvent without timestamp")
                             .to_chrono_utc()
+                            .expect("invalid timestamp")
                             > since
                     })
                     .map(StackEvent::from_sdk)

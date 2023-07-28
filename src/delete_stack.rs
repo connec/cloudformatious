@@ -2,7 +2,10 @@ use std::{fmt, future::Future, pin::Pin, task};
 
 use async_stream::try_stream;
 use aws_sdk_cloudformation::{
-    client::fluent_builders, error::DescribeStacksError, types::SdkError,
+    error::{ProvideErrorMetadata, SdkError},
+    operation::{
+        delete_stack::builders::DeleteStackFluentBuilder, describe_stacks::DescribeStacksError,
+    },
 };
 use chrono::Utc;
 use futures_util::{Stream, TryStreamExt};
@@ -123,7 +126,7 @@ impl DeleteStackInput {
         self
     }
 
-    fn configure(self, input: fluent_builders::DeleteStack) -> fluent_builders::DeleteStack {
+    fn configure(self, input: DeleteStackFluentBuilder) -> DeleteStackFluentBuilder {
         input
             .set_client_request_token(self.client_request_token)
             .set_retain_resources(self.retain_resources)
@@ -304,7 +307,7 @@ async fn describe_stack_id(
         .pop()
         .expect("DescribeStacksOutput empty stacks");
 
-    if stack.stack_status == Some(aws_sdk_cloudformation::model::StackStatus::DeleteComplete) {
+    if stack.stack_status == Some(aws_sdk_cloudformation::types::StackStatus::DeleteComplete) {
         Ok(None)
     } else {
         Ok(Some(stack.stack_id.expect("Stack without stack_id")))
@@ -321,5 +324,7 @@ fn check_operation_status(stack_status: StackStatus) -> StackOperationStatus {
 }
 
 fn is_not_exists(error: &SdkError<DescribeStacksError>) -> bool {
-    error.to_string().contains("does not exist")
+    error
+        .message()
+        .is_some_and(|msg| msg.contains("does not exist"))
 }
