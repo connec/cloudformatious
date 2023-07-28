@@ -139,7 +139,7 @@ impl StackEvent {
         }
     }
 
-    pub(crate) fn from_sdk(event: aws_sdk_cloudformation::model::StackEvent) -> Self {
+    pub(crate) fn from_sdk(event: aws_sdk_cloudformation::types::StackEvent) -> Self {
         let is_stack = event.physical_resource_id.as_deref() == event.stack_id.as_deref();
         let resource_status = event
             .resource_status
@@ -160,7 +160,8 @@ impl StackEvent {
             timestamp: event
                 .timestamp
                 .expect("StackEvent without timestamp")
-                .to_chrono_utc(),
+                .to_chrono_utc()
+                .expect("invalid timestamp"),
         };
         if is_stack {
             Self::Stack {

@@ -3,7 +3,9 @@
 use std::fmt;
 
 use aws_config::SdkConfig;
-use aws_sdk_sts::{error::DecodeAuthorizationMessageError, types::SdkError};
+use aws_sdk_sts::{
+    error::SdkError, operation::decode_authorization_message::DecodeAuthorizationMessageError,
+};
 use lazy_static::lazy_static;
 use regex::Regex;
 

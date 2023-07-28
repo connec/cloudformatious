@@ -1,4 +1,4 @@
-use aws_sdk_cloudformation::model::StackStatus;
+use aws_sdk_cloudformation::types::StackStatus;
 use futures_util::StreamExt;
 
 use cloudformatious::{ApplyStackInput, DeleteStackInput, Parameter, TemplateSource};
