@@ -88,9 +88,10 @@ async fn secrets_manager_secret_tags_only() -> Result<(), Box<dyn std::error::Er
         .flatten()
         .collect();
     assert!(!targets.is_empty());
-    assert!(targets
-        .iter()
-        .all(|target| matches!(target, ResourceTargetDefinition::Tags)));
+    assert!(targets.iter().all(|target| matches!(
+        target,
+        ResourceTargetDefinition::Properties { name, .. } if name == "Tags"
+    )));
 
     clean_up(stack_name).await?;
 
