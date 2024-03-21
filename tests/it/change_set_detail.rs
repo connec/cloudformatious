@@ -90,7 +90,7 @@ async fn secrets_manager_secret_tags_only() -> Result<(), Box<dyn std::error::Er
     assert!(!targets.is_empty());
     assert!(targets.iter().all(|target| matches!(
         target,
-        ResourceTargetDefinition::Properties { name, .. } if name == "Tags"
+        ResourceTargetDefinition::Properties { name, .. } if name.as_deref() == Some("Tags")
     )));
 
     clean_up(stack_name).await?;
