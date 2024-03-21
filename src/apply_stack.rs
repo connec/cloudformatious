@@ -610,7 +610,7 @@ impl fmt::Display for ApplyStackError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::CloudFormationApi(error) => {
-                write!(f, "CloudFormation API error: {error}")
+                write!(f, "CloudFormation API error: {error:#?}")
             }
             Self::Blocked { status } => {
                 write!(
