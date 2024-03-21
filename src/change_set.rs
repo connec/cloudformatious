@@ -609,7 +609,7 @@ pub enum ResourceTargetDefinition {
     /// A change to the resource's properties.
     Properties {
         /// The name of the property.
-        name: String,
+        name: Option<String>,
 
         /// Indicates whether a change to this property causes the resource to be recreated.
         requires_recreation: RequiresRecreation,
@@ -641,9 +641,7 @@ impl ResourceTargetDefinition {
             .expect("ResourceTargetDefinition without attribute");
         match attribute {
             aws_sdk_cloudformation::types::ResourceAttribute::Properties => Self::Properties {
-                name: target
-                    .name
-                    .expect("ResourceTargetDefinition with attribute \"Properties\" without name"),
+                name: target.name,
                 requires_recreation: target
                     .requires_recreation
                     .expect(concat!(
