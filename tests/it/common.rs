@@ -52,31 +52,11 @@ pub const NON_EMPTY_TEMPLATE: &str = r#"{
     }
 }"#;
 
-pub const MISSING_PERMISSION_1_TEMPLATE: &str = r#"{
-    "Resources": {
-        "Bucket": {
-            "Type": "AWS::S3::Bucket",
-            "Properties": {}
-        }
-    }
-}"#;
-
-pub const MISSING_PERMISSION_2_TEMPLATE: &str = r#"{
+pub const MISSING_PERMISSION_TEMPLATE: &str = r#"{
   "Resources": {
     "Fs": {
       "Type": "AWS::EFS::FileSystem",
       "Properties": {}
-    }
-  }
-}"#;
-
-pub const AUTHORIZATION_FAILURE_TEMPLATE: &str = r#"{
-  "Resources": {
-    "Vpc": {
-      "Type": "AWS::EC2::VPC",
-      "Properties": {
-        "CidrBlock": "0.0.0.0/16"
-      }
     }
   }
 }"#;
