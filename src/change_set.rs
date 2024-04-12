@@ -895,9 +895,7 @@ fn is_execute_blocked(
 }
 
 fn is_blocked(pattern: &Regex, message: &str) -> Option<BlockedStackStatus> {
-    let Some(detail) = pattern.captures(message) else {
-        return None;
-    };
+    let detail = pattern.captures(message)?;
 
     let status: StackStatus = detail
         .name("status")

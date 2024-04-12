@@ -712,7 +712,7 @@ impl<'client> ApplyStack<'client> {
                     Err(ApplyStackError::Failure(failure))?;
                     unreachable!()
                 }
-                Ok(_) => None,
+                Ok(()) => None,
                 Err(StackOperationError::Warning(warning)) => Some(warning),
             };
 

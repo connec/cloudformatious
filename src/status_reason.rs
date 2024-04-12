@@ -187,6 +187,12 @@ impl<'a> EncodedAuthorizationMessage<'a> {
     /// # Errors
     ///
     /// Any errors encountered when invoking the `sts:DecodeAuthorizationMessage` API are returned.
+    ///
+    /// # Panics
+    ///
+    /// This will panic if the `sts:DecodeAuthorizationMessage` API does not repond with a decoded
+    /// message (this is allowed by AWS SDK types but should never happen per the semantics of the
+    /// API).
     pub async fn decode(
         &self,
         config: &SdkConfig,
@@ -262,13 +268,13 @@ mod tests {
     fn status_reason_detail() {
         #![allow(clippy::shadow_unrelated)]
 
-        let example = r#"Resource creation cancelled"#;
+        let example = r"Resource creation cancelled";
         assert_eq!(
             StatusReasonDetail::new(example),
             Some(StatusReasonDetail::CreationCancelled)
         );
 
-        let example = r#"API: ec2:ModifyVpcAttribute You are not authorized to perform this operation. Encoded authorization failure message: g1-YvnBabE1x9q868e9rU4VX9gFjPpt31dEvX6uYDMWmdkou9pGLq85c3Wy4IAr3CwKrF8Jqu0aIkiy0TBM5SU22pSjE-gzZuP1dg5rvyhI1fl5DBB4DiDyRmZpOjovE2w0MMxuM4QFqf6zAtlbCtwdCYVxHwTpKrlkQAJEr40twnTPWe1_Vh-YRfprV9RBis8nReUcf87GV1oGFxjLujid4oOAinD-NmpIUR5VLCw2ycoOZihPR_unBC9stRioVeYiBg-Q1T5IU-J-xEQK092YuR-H4vqMm5Nwg4l1kN10t8pbFb_YopmILVfvh-ViLBbzE0cO6ZlvLvcMcB8crsbgLP10H05hPtHDIGUMwc_xM-y_9SUAcrVUfPKdM4JeMvNMLkFfuLcgMIjTivxG1y3DwligaBXrSwKVkkMB4XfswrU7nYT6PO0cIyD_v7vw5kPJP1EafEZGVMJrJJEwS43FVFkLCMIi6eSxyFTYRF4GUbkuXbTpfMxYdivdFdiofA6_JsC-AZXwcE3qXAHpJ3PrH6lYfWm8z0m8PATAQKTqlcEMIYNngNnmnqasBQ_anBj-C7BT4V_B67wOOhc_Vwheq6xKnsI7XfsTgzsmHdFZDVIBCrdw"#;
+        let example = r"API: ec2:ModifyVpcAttribute You are not authorized to perform this operation. Encoded authorization failure message: g1-YvnBabE1x9q868e9rU4VX9gFjPpt31dEvX6uYDMWmdkou9pGLq85c3Wy4IAr3CwKrF8Jqu0aIkiy0TBM5SU22pSjE-gzZuP1dg5rvyhI1fl5DBB4DiDyRmZpOjovE2w0MMxuM4QFqf6zAtlbCtwdCYVxHwTpKrlkQAJEr40twnTPWe1_Vh-YRfprV9RBis8nReUcf87GV1oGFxjLujid4oOAinD-NmpIUR5VLCw2ycoOZihPR_unBC9stRioVeYiBg-Q1T5IU-J-xEQK092YuR-H4vqMm5Nwg4l1kN10t8pbFb_YopmILVfvh-ViLBbzE0cO6ZlvLvcMcB8crsbgLP10H05hPtHDIGUMwc_xM-y_9SUAcrVUfPKdM4JeMvNMLkFfuLcgMIjTivxG1y3DwligaBXrSwKVkkMB4XfswrU7nYT6PO0cIyD_v7vw5kPJP1EafEZGVMJrJJEwS43FVFkLCMIi6eSxyFTYRF4GUbkuXbTpfMxYdivdFdiofA6_JsC-AZXwcE3qXAHpJ3PrH6lYfWm8z0m8PATAQKTqlcEMIYNngNnmnqasBQ_anBj-C7BT4V_B67wOOhc_Vwheq6xKnsI7XfsTgzsmHdFZDVIBCrdw";
         assert_eq!(
             StatusReasonDetail::new(example),
             Some(StatusReasonDetail::MissingPermission(MissingPermission {
@@ -278,7 +284,7 @@ mod tests {
             }))
         );
 
-        let example = r#"API: s3:CreateBucket Access Denied"#;
+        let example = r"API: s3:CreateBucket Access Denied";
         assert_eq!(
             StatusReasonDetail::new(example),
             Some(StatusReasonDetail::MissingPermission(MissingPermission {
@@ -299,7 +305,7 @@ mod tests {
         );
 
         let example =
-            r#"The following resource(s) failed to create: [Vpc, Fs]. Rollback requested by user."#;
+            r"The following resource(s) failed to create: [Vpc, Fs]. Rollback requested by user.";
         let detail = StatusReasonDetail::new(example).unwrap();
         assert_eq!(
             detail,
