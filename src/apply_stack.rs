@@ -260,7 +260,7 @@ impl ApplyStackInput {
             ))
             .change_set_name(format!("apply-stack-{}", Utc::now().timestamp_millis()))
             .change_set_type(change_set_type.into_sdk())
-            .set_notification_ar_ns(Some(self.notification_arns))
+            .set_notification_arns(Some(self.notification_arns))
             .set_parameters(Some(
                 self.parameters
                     .into_iter()
