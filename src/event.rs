@@ -116,6 +116,12 @@ impl StackEvent {
         self.details().stack_name.as_str()
     }
 
+    /// Get the alias for a nested stack.
+    #[must_use]
+    pub fn stack_alias(&self) -> Option<&str> {
+        self.details().stack_alias.as_deref()
+    }
+
     /// Get the time the status was updated.
     #[must_use]
     pub fn timestamp(&self) -> &DateTime<Utc> {
@@ -139,7 +145,10 @@ impl StackEvent {
         }
     }
 
-    pub(crate) fn from_sdk(event: aws_sdk_cloudformation::types::StackEvent) -> Self {
+    pub(crate) fn from_sdk(
+        stack_alias: Option<String>,
+        event: aws_sdk_cloudformation::types::StackEvent,
+    ) -> Self {
         let is_stack = event.physical_resource_id.as_deref() == event.stack_id.as_deref();
         let resource_status = event
             .resource_status
@@ -157,6 +166,7 @@ impl StackEvent {
                 .expect("StackEvent without resource_type"),
             stack_id: event.stack_id.expect("StackEvent without stack_id"),
             stack_name: event.stack_name.expect("StackEvent without stack_name"),
+            stack_alias,
             timestamp: event
                 .timestamp
                 .expect("StackEvent without timestamp")
@@ -225,6 +235,11 @@ pub struct StackEventDetails {
     /// The name associated with the stack.
     pub stack_name: String,
 
+    /// The alias for a nested stack.
+    ///
+    /// This is built up of the logical IDs of the nested stacks.
+    pub stack_alias: Option<String>,
+
     /// Time the status was updated.
     pub timestamp: DateTime<Utc>,
 }
@@ -291,6 +306,12 @@ impl StackEventDetails {
     #[must_use]
     pub fn stack_name(&self) -> &str {
         self.stack_name.as_str()
+    }
+
+    /// Get the alias for a nested stack.
+    #[must_use]
+    pub fn stack_alias(&self) -> Option<&str> {
+        self.stack_alias.as_deref()
     }
 
     /// Get the time the status was updated.

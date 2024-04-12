@@ -1,4 +1,4 @@
-use std::{fmt, pin::Pin, task, time::Duration};
+use std::{collections::BTreeMap, fmt, iter, pin::Pin, task, time::Duration};
 
 use async_stream::try_stream;
 use aws_sdk_cloudformation::{
@@ -6,7 +6,7 @@ use aws_sdk_cloudformation::{
 };
 use aws_smithy_types_convert::date_time::DateTimeExt;
 use chrono::{DateTime, Utc};
-use futures_util::Stream;
+use futures_util::{stream, Stream, TryStreamExt};
 
 use crate::{
     status_reason::StatusReason, ResourceStatus, StackEvent, StackEventDetails, StackStatus, Status,
@@ -159,32 +159,48 @@ where
         started_at: DateTime<Utc>,
         check_progress: F,
     ) -> Self {
-        let stack_id_ = stack_id.clone();
+        let root_stack_id = stack_id.clone();
         let events = try_stream! {
             let mut interval = tokio::time::interval(POLL_INTERVAL_STACK_EVENT);
             let mut since = started_at;
+            let mut nested_stacks = BTreeMap::<String, String>::new();
 
             loop {
                 interval.tick().await;
 
-                let stack_events: Vec<_> = client
-                    .describe_stack_events()
-                    .stack_name(stack_id_.clone())
-                    .send()
-                    .await?
-                    .stack_events
-                    .expect("DescribeStackEventsOutput without stack_events")
-                    .into_iter()
-                    .take_while(|event| {
-                        event
-                            .timestamp
-                            .expect("StackEvent without timestamp")
-                            .to_chrono_utc()
-                            .expect("invalid timestamp")
-                            > since
-                    })
-                    .map(StackEvent::from_sdk)
-                    .collect();
+                let stack_ids = iter::once(root_stack_id.clone()).chain(nested_stacks.keys().cloned());
+                let stack_events = stack_ids.into_iter().map(|stack_id| stream::once(Box::pin(async {
+                    let stack_events: Vec<_> = client
+                        .describe_stack_events()
+                        .stack_name(stack_id)
+                        .send()
+                        .await?
+                        .stack_events
+                        .expect("DescribeStackEventsOutput without stack_events")
+                        .into_iter()
+                        .take_while(|event| {
+                            event
+                                .timestamp
+                                .expect("StackEvent without timestamp")
+                                .to_chrono_utc()
+                                .expect("invalid timestamp")
+                                > since
+                        })
+                        .map(|event| {
+                            let stack_alias = event.stack_id().and_then(|stack_id| nested_stacks.get(stack_id)).cloned();
+                            StackEvent::from_sdk(stack_alias, event)
+                        })
+                        .filter(|event| {
+                            match event {
+                                StackEvent::Stack { details, .. } => details.stack_id() == root_stack_id,
+                                StackEvent::Resource{ .. } => true,
+                            }
+                        })
+                        .collect();
+                    Ok::<_, SdkError<DescribeStackEventsError>>(stack_events)
+                })));
+                let stack_events: Vec<_> = stream::select_all(stack_events).try_collect().await?;
+                let stack_events: Vec<_> = stack_events.into_iter().flatten().collect();
 
                 if let Some(stack_event) = stack_events.first() {
                     since = *stack_event.timestamp();
@@ -192,6 +208,26 @@ where
 
                 for stack_event in stack_events.into_iter().rev() {
                     let is_terminal = stack_event.is_terminal();
+
+                    match &stack_event {
+                        StackEvent::Resource {
+                            details: details @ StackEventDetails {
+                                physical_resource_id: Some(nested_stack_id),
+                                ..
+                            },
+                            ..
+                        } if details.resource_type() == "AWS::CloudFormation::Stack" && !nested_stack_id.is_empty() => {
+                            let stack_alias = nested_stacks
+                                .get(details.stack_id())
+                                .map(String::as_str)
+                                .into_iter()
+                                .chain(iter::once(details.logical_resource_id()))
+                                .collect::<Vec<_>>()
+                                .join("/");
+                            nested_stacks.insert(nested_stack_id.clone(), stack_alias);
+                        },
+                        _ => {},
+                    }
 
                     yield stack_event;
 
@@ -261,7 +297,7 @@ where
                     }
                     StackEvent::Stack {
                         resource_status, ..
-                    } => {
+                    } if event.stack_id() == self.stack_id => {
                         if resource_status.sentiment().is_negative() {
                             if let Some(reason) = event.resource_status_reason() {
                                 self.stack_error_status_reason.replace(reason.to_string());
@@ -277,6 +313,8 @@ where
                             }
                         }
                     }
+                    // Do nothing for nested stack events since resource events from the parent stack will be processed.
+                    StackEvent::Stack { .. } => {}
                 }
                 task::Poll::Ready(Some(Ok(event)))
             }
