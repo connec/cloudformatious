@@ -148,7 +148,7 @@ impl ChangeSet {
                 .as_str()
                 .parse()
                 .expect("DescribeChangeSetOutput with invalid execution_status"),
-            notification_arns: change_set.notification_ar_ns.unwrap_or_default(),
+            notification_arns: change_set.notification_arns.unwrap_or_default(),
             parameters: change_set
                 .parameters
                 .unwrap_or_default()
