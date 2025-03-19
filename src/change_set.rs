@@ -463,7 +463,7 @@ pub use modify_scope::ModifyScope;
 /// A change that AWS CloudFormation will make to a resource.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ResourceChangeDetail {
-    /// The group to which the CausingEntity value belongs.
+    /// The identity of the entity that triggered this change.
     ///
     /// This will not be present if the change source cannot be described by CloudFormation's
     /// limited vocabulary, such as tags supplied when creating a change set.

@@ -294,7 +294,7 @@ impl ApplyStackInput {
 ///   - If you have IAM resources, you can specify either capability.
 ///   - If you have IAM resources with custom names, you *must* specify `CAPABILITY_NAMED_IAM`.
 ///   - If you don't specify either of these capabilities, AWS CloudFormation returns an
-///    `InsufficientCapabilities` error.
+///     `InsufficientCapabilities` error.
 ///
 ///   If you stack template contains these resources, we recommend that you review all
 ///   permissions associated with them and edit their permissions if necessary.
