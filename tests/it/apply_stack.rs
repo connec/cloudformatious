@@ -2,8 +2,8 @@ use futures_util::StreamExt;
 
 use cloudformatious::{
     change_set::{Action, ExecutionStatus},
-    ApplyStackError, ApplyStackInput, ChangeSetStatus, ResourceStatus, StackFailure, StackStatus,
-    TemplateSource,
+    ApplyStackError, ApplyStackInput, ChangeSetStatus, ResourceStatus, ResumeInput, StackFailure,
+    StackStatus, TemplateSource,
 };
 
 use crate::common::{
@@ -537,6 +537,68 @@ async fn apply_to_update_rollback_complete_idempotent() -> Result<(), Box<dyn st
     assert_eq!(output.stack_status, StackStatus::UpdateRollbackComplete);
 
     clean_up(failure.stack_id).await?;
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn resume_fut_ok() -> Result<(), Box<dyn std::error::Error>> {
+    let client = get_client().await;
+
+    let stack_name = generated_name();
+    let input = ApplyStackInput::new(&stack_name, TemplateSource::inline(EMPTY_TEMPLATE));
+    let mut apply = client.apply_stack(input);
+
+    apply.change_set().await?;
+
+    let event = apply.events().next().await.ok_or("no stack events")?;
+
+    let input = ResumeInput::new(event.stack_id());
+    let output = client.resume_apply_stack(input).await?;
+    assert_eq!(output.stack_status, StackStatus::CreateComplete);
+
+    clean_up(stack_name).await?;
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn resume_stream_ok() -> Result<(), Box<dyn std::error::Error>> {
+    let client = get_client().await;
+
+    let stack_name = generated_name();
+    let input = ApplyStackInput::new(&stack_name, TemplateSource::inline(EMPTY_TEMPLATE));
+    let mut apply = client.apply_stack(input);
+
+    apply.change_set().await?;
+
+    let event = apply.events().next().await.ok_or("no stack events")?;
+
+    let input = ResumeInput::new(event.stack_id());
+    let mut apply = client.resume_apply_stack(input);
+
+    let events: Vec<_> = apply
+        .events()
+        .map(|event| {
+            (
+                event.logical_resource_id().to_string(),
+                event.resource_status().to_string(),
+            )
+        })
+        .collect()
+        .await;
+    let output = apply.await?;
+
+    assert_eq!(output.stack_status, StackStatus::CreateComplete);
+    assert_eq!(
+        events,
+        vec![
+            (stack_name.clone(), "CREATE_IN_PROGRESS".to_string()),
+            (stack_name.clone(), "CREATE_COMPLETE".to_string()),
+        ]
+    );
+
+    clean_up(stack_name).await?;
 
     Ok(())
 }

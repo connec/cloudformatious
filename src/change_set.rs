@@ -1,15 +1,21 @@
 //! Helpers for working with change sets.
 
-use std::{convert::TryFrom, fmt, time::Duration};
+use std::{
+    convert::TryFrom,
+    fmt,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 
 use aws_sdk_cloudformation::{
+    config::{http::HttpResponse, Intercept},
     error::{ProvideErrorMetadata, SdkError},
     operation::create_change_set::builders::CreateChangeSetFluentBuilder,
     operation::describe_change_set::{DescribeChangeSetError, DescribeChangeSetOutput},
     types::{Change, ChangeAction},
 };
 use aws_smithy_types_convert::date_time::DateTimeExt;
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, TimeDelta, Utc};
 use enumset::EnumSet;
 use futures_util::TryFutureExt;
 use regex::Regex;
@@ -463,7 +469,7 @@ pub use modify_scope::ModifyScope;
 /// A change that AWS CloudFormation will make to a resource.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ResourceChangeDetail {
-    /// The group to which the CausingEntity value belongs.
+    /// The identity of the entity that triggered this change.
     ///
     /// This will not be present if the change source cannot be described by CloudFormation's
     /// limited vocabulary, such as tags supplied when creating a change set.
@@ -861,6 +867,104 @@ pub(crate) async fn execute_change_set(
             ChangeSetType::Create => check_create_progress,
             ChangeSetType::Update => check_update_progress,
         },
+    ))
+}
+
+pub(crate) async fn resume_execute_change_set(
+    client: &aws_sdk_cloudformation::Client,
+    stack_id: String,
+) -> Result<
+    (
+        String,
+        StackOperation<'_, impl Fn(StackStatus) -> StackOperationStatus + Unpin>,
+    ),
+    SdkError<aws_sdk_cloudformation::operation::describe_stacks::DescribeStacksError>,
+> {
+    #[derive(Clone, Debug, Default)]
+    struct GetResponse {
+        response: Arc<Mutex<Option<HttpResponse>>>,
+    }
+
+    impl Intercept for GetResponse {
+        fn name(&self) -> &'static str {
+            "GetResponse"
+        }
+
+        fn read_after_execution(
+            &self,
+            context: &aws_sdk_cloudformation::config::interceptors::FinalizerInterceptorContextRef<
+                '_,
+            >,
+            _runtime_components: &aws_sdk_cloudformation::config::RuntimeComponents,
+            _cfg: &mut aws_sdk_cloudformation::config::ConfigBag,
+        ) -> Result<(), aws_sdk_cloudformation::error::BoxError> {
+            if let Some(res) = context.response() {
+                if let Some(body) = res.body().try_clone() {
+                    let mut res_clone = HttpResponse::new(res.status(), body);
+                    *res_clone.headers_mut() = res.headers().clone();
+                    *self.response.lock().unwrap() = Some(res_clone);
+                }
+            }
+            Ok(())
+        }
+    }
+
+    let get_response = GetResponse::default();
+    let result = client
+        .describe_stacks()
+        .stack_name(&stack_id)
+        .customize()
+        .interceptor(get_response.clone())
+        .send()
+        .await?;
+
+    let stack =
+        result
+            .stacks
+            .as_ref()
+            .and_then(|stacks| {
+                let (stack, others) = stacks.split_first()?;
+
+                assert!(
+                    others.is_empty(),
+                    "unexpected response from describe stacks (multiple stacks)"
+                );
+
+                Some(stack)
+            })
+            .ok_or_else(|| {
+                SdkError::service_error(
+                aws_sdk_cloudformation::operation::describe_stacks::DescribeStacksError::unhandled(
+                    "stack not found",
+                ),
+                get_response.response.lock().unwrap().take().expect("BUG: no response intercepted"),
+            )
+            })?;
+
+    let stack_id = stack.stack_id.clone().expect("Stack without stack_id");
+    let change_set_id = stack
+        .change_set_id
+        .clone()
+        .expect("Stack without change_set_id");
+    let started_at = stack
+        .last_updated_time
+        .or(stack.creation_time)
+        .expect("Stack without creation_time")
+        .to_chrono_utc()
+        .expect("invalid timestamp")
+        - TimeDelta::seconds(1);
+
+    Ok((
+        change_set_id,
+        StackOperation::new(
+            client,
+            stack_id,
+            started_at,
+            |status| match check_create_progress(status) {
+                StackOperationStatus::Unexpected => check_update_progress(status),
+                status => status,
+            },
+        ),
     ))
 }
 

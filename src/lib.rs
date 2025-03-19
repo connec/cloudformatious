@@ -54,6 +54,16 @@ impl Client {
         ApplyStack::new(&self.inner, input)
     }
 
+    /// Resume processing an in-progress `apply_stack` operation.
+    ///
+    /// The returned `Future` can be used to simply wait for the operation to complete. You can also
+    /// use [`ApplyStack::events`] to get a `Stream` of the stack events that occur during the
+    /// operation. See [`ApplyStack`] for more details.
+    #[must_use]
+    pub fn resume_apply_stack(&self, input: ResumeInput) -> ApplyStack {
+        ApplyStack::resume(&self.inner, input)
+    }
+
     /// Delete a CloudFormation stack from an AWS environment.
     ///
     /// This is an idempotent operation that will delete the indicated stack if it exists, or do
@@ -65,6 +75,41 @@ impl Client {
     #[must_use]
     pub fn delete_stack(&self, input: DeleteStackInput) -> DeleteStack {
         DeleteStack::new(&self.inner, input)
+    }
+}
+
+/// The input for [`resume_apply_stack`](Client::resume_apply_stack).
+///
+/// You can create an input via the [`new`](Self::new) associated function. Setters are available
+/// to make construction ergonomic.
+#[derive(Clone, Debug)]
+pub struct ResumeInput {
+    /// The unique identifier for the operation.
+    ///
+    /// All events triggered by a given stack operation are assigned the same client request token,
+    /// which are used to track operations.
+    pub client_request_token: Option<String>,
+
+    /// The ID (or name) of the stack.
+    pub stack_id: String,
+}
+
+impl ResumeInput {
+    /// Construct an input for the given `stack_id`.
+    pub fn new(stack_id: impl Into<String>) -> Self {
+        Self {
+            stack_id: stack_id.into(),
+            client_request_token: None,
+        }
+    }
+
+    /// Set the value for `client_request_token`.
+    ///
+    /// **Note:** this consumes and returns `self` for chaining.
+    #[must_use]
+    pub fn set_client_request_token(mut self, client_request_token: impl Into<String>) -> Self {
+        self.client_request_token = Some(client_request_token.into());
+        self
     }
 }
 

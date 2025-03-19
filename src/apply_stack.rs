@@ -13,11 +13,12 @@ use futures_util::{Stream, TryFutureExt, TryStreamExt};
 
 use crate::{
     change_set::{
-        create_change_set, execute_change_set, ChangeSet, ChangeSetType, ChangeSetWithType,
-        CreateChangeSetError, ExecuteChangeSetError,
+        create_change_set, execute_change_set, resume_execute_change_set, ChangeSet, ChangeSetType,
+        ChangeSetWithType, CreateChangeSetError, ExecuteChangeSetError,
     },
     stack::StackOperationError,
-    BlockedStackStatus, ChangeSetStatus, StackEvent, StackFailure, StackStatus, StackWarning, Tag,
+    BlockedStackStatus, ChangeSetStatus, ResumeInput, StackEvent, StackFailure, StackStatus,
+    StackWarning, Tag,
 };
 
 /// The input for the `apply_stack` operation.
@@ -294,7 +295,7 @@ impl ApplyStackInput {
 ///   - If you have IAM resources, you can specify either capability.
 ///   - If you have IAM resources with custom names, you *must* specify `CAPABILITY_NAMED_IAM`.
 ///   - If you don't specify either of these capabilities, AWS CloudFormation returns an
-///    `InsufficientCapabilities` error.
+///     `InsufficientCapabilities` error.
 ///
 ///   If you stack template contains these resources, we recommend that you review all
 ///   permissions associated with them and edit their permissions if necessary.
@@ -717,6 +718,49 @@ impl<'client> ApplyStack<'client> {
             };
 
             let output = describe_output(client, stack_id, change_set_id).await?;
+
+            match warning {
+                Some(warning) => {
+                    Err(ApplyStackError::Warning { output, warning })?;
+                    unreachable!()
+                }
+                None => yield ApplyStackEvent::Output(output),
+            };
+        };
+        Self {
+            event_stream: Box::pin(event_stream),
+            output: None,
+        }
+    }
+
+    pub(crate) fn resume(
+        client: &'client aws_sdk_cloudformation::Client,
+        input: ResumeInput,
+    ) -> Self {
+        let event_stream = try_stream! {
+            let (change_set_id, mut operation) =
+                resume_execute_change_set(client, input.stack_id.clone())
+                    .await
+                    .map_err(ApplyStackError::from_sdk_error)?;
+
+            while let Some(event) = operation
+                .try_next()
+                .await
+                .map_err(ApplyStackError::from_sdk_error)?
+            {
+                yield ApplyStackEvent::Event(event);
+            }
+
+            let warning = match operation.verify() {
+                Err(StackOperationError::Failure(failure)) => {
+                    Err(ApplyStackError::Failure(failure))?;
+                    unreachable!()
+                }
+                Ok(()) => None,
+                Err(StackOperationError::Warning(warning)) => Some(warning),
+            };
+
+            let output = describe_output(client, input.stack_id, change_set_id).await?;
 
             match warning {
                 Some(warning) => {
